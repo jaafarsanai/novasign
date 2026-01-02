@@ -1,0 +1,53 @@
+.screens-container {
+  padding: 32px 40px;
+}
+
+.screens-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 26px;
+}
+
+.screens-title {
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.screens-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.btn {
+  padding: 10px 20px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  border: none;
+}
+
+.btn.primary {
+  background: #007aff;
+  color: white;
+}
+
+.btn.secondary {
+  background: #eee;
+  color: #333;
+}
+
+.screens-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 22px;
+}
+
+.screens-loading {
+  padding: 80px;
+  text-align: center;
+  color: #777;
+  font-size: 16px;
+}
+

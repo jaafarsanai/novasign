@@ -1,0 +1,61 @@
+/* src/mobile.css
+   Global mobile overrides to make the admin usable on phones.
+   Safe: only applies <= 900px.
+*/
+
+@media (max-width: 900px) {
+  /* Reduce overall padding to avoid “cramped + oversized” layout */
+  body {
+    overflow-x: hidden;
+  }
+
+  /* Hide typical sidebars / nav rails (covers many templates) */
+  .sidebar,
+  .app-sidebar,
+  .left-sidebar,
+  .main-sidebar,
+  .sidenav,
+  .side-nav,
+  .nav-sidebar,
+  .drawer,
+  aside,
+  nav[aria-label="Sidebar"],
+  [data-sidebar="true"],
+  [data-role="sidebar"] {
+    display: none !important;
+  }
+
+  /* Remove left offsets if the template uses them */
+  .content,
+  .main,
+  .main-content,
+  .app-content,
+  .page-content,
+  .wrapper,
+  .layout,
+  .container,
+  #app,
+  #root {
+    margin-left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* Prevent wide tables/cards from breaking the viewport */
+  .card,
+  .panel,
+  .box,
+  .content-wrapper {
+    max-width: 100% !important;
+  }
+
+  /* Make buttons and inputs easier to tap */
+  button,
+  .btn,
+  input,
+  select,
+  textarea {
+    font-size: 16px; /* prevents iOS zoom on focus */
+  }
+}
+

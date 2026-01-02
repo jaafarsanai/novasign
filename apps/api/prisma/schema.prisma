@@ -1,0 +1,105 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Screen {
+  id                 String            @id @default(cuid())
+  name               String?
+  lastSeenAt         DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+  pairingCode        String            @unique
+  assignedPlaylistId String?
+  orientation        ScreenOrientation @default(LANDSCAPE)
+  timezone           String            @default("UTC")
+  pairedAt           DateTime?
+
+  // identifies rows created/owned by the browser “virtual screen”
+  isVirtual          Boolean           @default(false)
+
+  assignedPlaylist   Playlist?         @relation(fields: [assignedPlaylistId], references: [id])
+
+  @@index([assignedPlaylistId])
+  @@index([isVirtual])
+}
+
+model Playlist {
+  id        String         @id @default(cuid())
+  name      String
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+  items     PlaylistItem[]
+  screens   Screen[]
+}
+
+model PlaylistItem {
+  id         String   @id @default(cuid())
+  playlistId String
+  mediaId    String
+  order      Int
+  duration   Int?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  media      Media    @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+
+  @@index([playlistId])
+  @@index([mediaId])
+}
+
+model MediaFolder {
+  id        String       @id @default(cuid())
+  name      String
+  parentId  String?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  parent    MediaFolder? @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  MediaFolder[] @relation("MediaFolderTree")
+
+  media     Media[]
+
+  @@index([parentId])
+  @@unique([parentId, name])
+}
+
+model Media {
+  id            String         @id @default(cuid())
+  url           String
+  type          String
+
+  // Display name (original filename)
+  name          String?
+  mimeType      String?
+  sizeBytes     Int?
+
+  // SHA-256 checksum used for dedupe
+  checksum      String?        @unique
+
+  // Optional: video duration in ms (can be filled later)
+  durationMs    Int?
+
+  folderId      String?
+  folder        MediaFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  playlistItems PlaylistItem[]
+
+  @@index([folderId])
+  @@index([type])
+  @@index([createdAt])
+}
+
+enum ScreenOrientation {
+  LANDSCAPE
+  PORTRAIT
+}
+

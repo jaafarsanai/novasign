@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "Screen" ALTER COLUMN "name" DROP NOT NULL,
+ALTER COLUMN "name" SET DEFAULT '';

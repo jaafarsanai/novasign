@@ -1,0 +1,74 @@
+.pld-page {
+  padding: 18px 6px;
+}
+
+.pld-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pld-title {
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.pld-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.pld-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.pld-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pld-btn:hover:enabled {
+  background: #f9fafb;
+}
+
+.pld-card {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow: 0 10px 30px rgba(16, 24, 40, 0.06);
+  padding: 16px;
+}
+
+.pld-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: #6b7280;
+  font-size: 12px;
+  margin-top: 6px;
+}
+
+.pld-section-title {
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 900;
+  color: #111827;
+  letter-spacing: 0.02em;
+}
+
+.pld-empty {
+  margin-top: 10px;
+  color: #6b7280;
+  font-size: 13px;
+}
+

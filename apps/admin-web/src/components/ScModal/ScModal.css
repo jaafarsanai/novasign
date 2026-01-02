@@ -1,0 +1,45 @@
+.scm-backdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(17,24,39,.55);
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding: 24px;
+  z-index: 9999;
+}
+
+.scm-card{
+  width: min(920px, calc(100vw - 48px));
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 30px 80px rgba(0,0,0,.25);
+  position: relative;
+
+  /* avoids odd internal scrollbars */
+  max-height: calc(100vh - 48px);
+  overflow: hidden;
+}
+
+.scm-x{
+  position:absolute;
+  top: 18px;
+  right: 18px;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #e6e9ef;
+  background: #fff;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  cursor:pointer;
+}
+
+.scm-title{
+  text-align:center;
+  font-size: 28px;
+  font-weight: 750;
+  padding: 42px 24px 6px;
+}
+

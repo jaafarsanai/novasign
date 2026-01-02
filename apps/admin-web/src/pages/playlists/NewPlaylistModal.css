@@ -1,0 +1,120 @@
+.npl-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4600;
+}
+
+.npl-modal {
+  width: min(520px, calc(100vw - 28px));
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.25);
+  padding: 16px;
+}
+
+.npl-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.npl-title {
+  font-size: 18px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.npl-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.npl-close:hover {
+  background: #f3f4f6;
+}
+
+.npl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.npl-label {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 800;
+}
+
+.npl-input {
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  padding: 0 12px;
+  outline: none;
+  font-weight: 700;
+}
+
+.npl-input:focus {
+  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.08);
+}
+
+.npl-error {
+  margin-top: 6px;
+  color: #b91c1c;
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.npl-actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.npl-btn {
+  height: 38px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.npl-btn:hover:enabled {
+  background: #f8fafc;
+}
+
+.npl-btn-primary {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+
+.npl-btn-primary:hover:enabled {
+  background: #111827;
+}
+
+.npl-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+

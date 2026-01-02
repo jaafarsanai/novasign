@@ -1,0 +1,138 @@
+.ie-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 6500;
+}
+
+.ie-modal {
+  width: min(1100px, calc(100vw - 56px));
+  height: min(720px, calc(100vh - 56px));
+  background: #fff;
+  border-radius: 6px;
+  box-shadow: 0 22px 70px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.ie-header {
+  height: 56px;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+}
+
+.ie-breadcrumb {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 850;
+  color: #111827;
+}
+
+.ie-bc-muted {
+  color: #9ca3af;
+  font-weight: 800;
+}
+.ie-bc-sep {
+  color: #cbd5e1;
+  font-weight: 900;
+}
+
+.ie-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+}
+.ie-close:hover {
+  background: #f9fafb;
+}
+
+.ie-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 64px 1fr;
+}
+
+.ie-tools {
+  border-right: 1px solid #e5e7eb;
+  background: #f3f4f6;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+
+.ie-tool {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: #fff;
+  cursor: pointer;
+  font-weight: 900;
+}
+.ie-tool:hover {
+  background: #f9fafb;
+}
+
+.ie-canvas-wrap {
+  padding: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+}
+
+.ie-canvas {
+  width: 100%;
+  max-width: 980px;
+  height: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+.ie-footer {
+  height: 56px;
+  border-top: 1px solid #e5e7eb;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ie-btn {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 4px;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  cursor: pointer;
+  font-weight: 850;
+}
+.ie-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.ie-btn-primary {
+  background: #2563eb;
+  border-color: #1d4ed8;
+  color: #fff;
+}
+.ie-btn-primary:hover {
+  filter: brightness(0.98);
+}
+

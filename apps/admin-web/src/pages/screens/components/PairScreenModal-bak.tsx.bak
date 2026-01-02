@@ -1,0 +1,212 @@
+import React from "react";
+import "./PairScreenModal.css";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  onSuccess?: () => void;
+  initialPairCode?: string;
+};
+
+export default function PairScreenModal({
+  open,
+  onClose,
+  onSuccess,
+  initialPairCode = "",
+}: Props) {
+  const [digits, setDigits] = React.useState<string[]>(["", "", "", "", "", ""]);
+  const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const inputsRef = React.useRef<Array<HTMLInputElement | null>>([]);
+
+  React.useEffect(() => {
+    if (!open) return;
+
+    const normalized = normalize(initialPairCode);
+    setDigits(codeToDigits(normalized));
+    setError(null);
+    setLoading(false);
+
+    // focus first empty box
+    setTimeout(() => {
+      const idx = codeToDigits(normalized).findIndex((d) => !d);
+      focusIndex(idx === -1 ? 5 : idx);
+    }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialPairCode]);
+
+  if (!open) return null;
+
+  function normalize(v: string) {
+    return (v || "").replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 6);
+  }
+
+  function codeToDigits(code: string) {
+    const arr = code.split("").slice(0, 6);
+    while (arr.length < 6) arr.push("");
+    return arr;
+  }
+
+  function digitsToCode(ds: string[]) {
+    return ds.join("").toUpperCase();
+  }
+
+  function focusIndex(i: number) {
+    const el = inputsRef.current[i];
+    if (el) el.focus();
+  }
+
+  function setAt(i: number, val: string) {
+    const v = normalize(val);
+    const next = [...digits];
+    next[i] = v.slice(0, 1);
+    setDigits(next);
+  }
+
+  function fillFrom(i: number, code: string) {
+    const v = normalize(code);
+    if (!v) return;
+
+    const next = [...digits];
+    for (let k = 0; k < v.length && i + k < 6; k++) {
+      next[i + k] = v[k];
+    }
+    setDigits(next);
+
+    const nextFocus = Math.min(i + v.length, 5);
+    setTimeout(() => focusIndex(nextFocus), 0);
+  }
+
+  async function pairNow(codeRaw: string) {
+    const c = normalize(codeRaw);
+
+    if (!c || c.length !== 6) {
+      setError("Please enter a valid 6-character code.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // 1) register (idempotent)
+      const registerRes = await fetch("/api/screens/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ code: c, isVirtual: true, name: "Virtual Screen" }),
+      });
+
+      if (!registerRes.ok && registerRes.status !== 409) {
+        const t = await registerRes.text().catch(() => "");
+        throw new Error(t || `Register failed (${registerRes.status})`);
+      }
+
+      // 2) claim
+      const claimRes = await fetch("/api/screens/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ code: c }),
+      });
+
+      if (!claimRes.ok) {
+        const t = await claimRes.text().catch(() => "");
+        throw new Error(t || `Claim failed (${claimRes.status})`);
+      }
+
+      onSuccess?.();
+      onClose();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || "Failed to pair screen.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const code = digitsToCode(digits);
+
+  return (
+    <div className="ns2-modal-overlay" onClick={onClose}>
+      <div className="ns2-modal" onClick={(e) => e.stopPropagation()}>
+        <button className="ns2-modal-close" onClick={onClose} aria-label="Close">
+          ×
+        </button>
+
+        <div className="ns2-modal-header">
+          <h3 className="ns2-modal-title">Pair your screen</h3>
+          <div className="ns2-modal-subtitle">
+            Enter the 6-character code displayed on your TV or virtual screen.
+          </div>
+        </div>
+
+        <div className="ns2-code-row">
+          {digits.map((d, i) => (
+            <input
+              key={i}
+              className="ns2-code-box"
+              value={d}
+              inputMode="text"
+              autoComplete="one-time-code"
+              maxLength={1}
+              onChange={(e) => {
+                const v = normalize(e.target.value);
+                if (!v) {
+                  setAt(i, "");
+                  return;
+                }
+
+                // If user pasted multiple chars into one input, distribute them.
+                if (v.length > 1) {
+                  fillFrom(i, v);
+                  return;
+                }
+
+                setAt(i, v);
+                if (i < 5) focusIndex(i + 1);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Backspace") {
+                  if (digits[i]) {
+                    setAt(i, "");
+                  } else if (i > 0) {
+                    focusIndex(i - 1);
+                    setAt(i - 1, "");
+                  }
+                } else if (e.key === "ArrowLeft" && i > 0) {
+                  focusIndex(i - 1);
+                } else if (e.key === "ArrowRight" && i < 5) {
+                  focusIndex(i + 1);
+                } else if (e.key === "Enter") {
+                  pairNow(code);
+                }
+              }}
+              onPaste={(e) => {
+                e.preventDefault();
+                const text = (e.clipboardData || (window as any).clipboardData).getData("text");
+                fillFrom(i, text);
+              }}
+              // IMPORTANT: ref callback must return void (fixes TS2322)
+              ref={(el) => {
+                inputsRef.current[i] = el;
+              }}
+            />
+          ))}
+        </div>
+
+        {error && <div className="ns2-modal-error">{error}</div>}
+
+        <button
+          className="ns2-modal-primary"
+          disabled={loading}
+          onClick={() => pairNow(code)}
+        >
+          {loading ? "Pairing..." : "Pair Screen"}
+        </button>
+      </div>
+    </div>
+  );
+}
+

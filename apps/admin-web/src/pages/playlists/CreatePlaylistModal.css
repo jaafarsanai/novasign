@@ -1,0 +1,111 @@
+.cpm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 4000;
+}
+
+.cpm-modal {
+  width: min(560px, calc(100vw - 32px));
+  background: #ffffff;
+  border-radius: 16px;
+  padding: 18px 18px 16px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.25);
+}
+
+.cpm-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.cpm-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.cpm-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.cpm-close:hover {
+  background: #f8fafc;
+}
+
+.cpm-sub {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-weight: 650;
+  font-size: 13px;
+}
+
+.cpm-input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid #dbe3ee;
+  outline: none;
+  font-weight: 800;
+}
+
+.cpm-input:focus {
+  border-color: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.08);
+}
+
+.cpm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.cpm-btn {
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.cpm-cancel {
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  color: #0f172a;
+}
+
+.cpm-cancel:hover:enabled {
+  background: #f8fafc;
+}
+
+.cpm-create {
+  border: none;
+  background: #0f172a;
+  color: #fff;
+}
+
+.cpm-create:hover:enabled {
+  opacity: 0.92;
+}
+
+.cpm-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+

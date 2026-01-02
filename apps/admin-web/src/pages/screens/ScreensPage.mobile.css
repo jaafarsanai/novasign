@@ -1,0 +1,55 @@
+/* src/pages/screens/ScreensPage.mobile.css */
+
+@media (max-width: 900px) {
+  .screens-page {
+    padding: 12px !important;
+  }
+
+  /* Any header/action row: stack it */
+  .screens-header,
+  .screens-topbar,
+  .screens-actions-row {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 10px !important;
+  }
+
+  /* Search becomes full width */
+  .screens-search,
+  .screens-search input,
+  input[type="search"] {
+    width: 100% !important;
+  }
+
+  /* Buttons become full width for tap usability */
+  .screens-header button,
+  .screens-header .btn,
+  .screens-actions-row button,
+  .screens-actions-row .btn {
+    width: 100% !important;
+  }
+
+  /* Table: make it horizontally scrollable */
+  .screens-table-wrap {
+    width: 100%;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 14px;
+  }
+
+  .screens-table {
+    min-width: 780px; /* keeps columns readable */
+  }
+
+  /* Pair modal/dialog sizing (if you have one) */
+  .modal,
+  .pair-modal,
+  .dialog,
+  .popup {
+    width: calc(100vw - 24px) !important;
+    max-width: 520px !important;
+    margin: 12px auto !important;
+  }
+}
+

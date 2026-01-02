@@ -1,0 +1,105 @@
+.psm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  z-index: 9999;
+}
+
+.psm-modal {
+  width: min(560px, 92vw);
+  background: #fff;
+  border-radius: 16px;
+  border: 1px solid #e5e7eb;
+  box-shadow: 0 30px 120px rgba(0,0,0,0.25);
+  padding: 18px 18px 16px;
+}
+
+.psm-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+  margin-bottom: 14px;
+}
+
+.psm-title {
+  font-size: 18px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.psm-sub {
+  margin-top: 4px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+.psm-x {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 0;
+  color: #0f172a;
+}
+
+.psm-input {
+  width: 100%;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  padding: 14px 14px;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  outline: none;
+}
+
+.psm-input:focus {
+  border-color: #94a3b8;
+  box-shadow: 0 0 0 4px rgba(148,163,184,0.25);
+}
+
+.psm-error {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #b91c1c;
+}
+
+.psm-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.psm-btn {
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 800;
+  border: 1px solid transparent;
+  cursor: pointer;
+}
+
+.psm-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.psm-btn-ghost {
+  background: #fff;
+  border-color: #e5e7eb;
+  color: #0f172a;
+}
+
+.psm-btn-primary {
+  background: #facc15;
+  border-color: #facc15;
+  color: #111827;
+}
+

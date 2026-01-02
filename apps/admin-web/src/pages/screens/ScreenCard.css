@@ -1,0 +1,77 @@
+.screen-card {
+  background: white;
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: 0 4px 18px rgba(0,0,0,0.08);
+  transition: 0.2s ease;
+  cursor: pointer;
+}
+
+.screen-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 26px rgba(0,0,0,0.12);
+}
+
+.screen-preview {
+  width: 100%;
+  height: 160px;
+  background: #111;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  font-size: 34px;
+  color: rgba(255,255,255,0.2);
+}
+
+.screen-offline {
+  letter-spacing: 10px;
+}
+
+.screen-info {
+  margin-top: 14px;
+}
+
+.screen-name {
+  font-size: 17px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.screen-status-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  margin-bottom: 12px;
+}
+
+.screen-status {
+  padding: 3px 8px;
+  border-radius: 8px;
+  font-weight: 600;
+}
+
+.screen-status.live {
+  background: #e0f4ff;
+  color: #007aff;
+}
+
+.screen-status.offline {
+  background: #f4e0e0;
+  color: #d33;
+}
+
+.last-seen {
+  color: #777;
+}
+
+.screen-actions-row {
+  text-align: right;
+}
+
+.screen-more {
+  font-size: 22px;
+  cursor: pointer;
+  background: none;
+  border: none;
+}
+

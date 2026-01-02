@@ -1,0 +1,427 @@
+import React from "react";
+import "./ScreensPage.css";
+import PairScreenModal from "./components/PairScreenModal";
+import { useLocation } from "react-router-dom";
+import { createPortal } from "react-dom";
+
+export interface ScreenDto {
+  id: string;
+  name: string;
+  status: "PENDING" | "LIVE" | string;
+  isVirtual?: boolean;
+  lastSeenAt?: string | null;
+}
+
+function useQuery() {
+  const { search } = useLocation();
+  return React.useMemo(() => new URLSearchParams(search), [search]);
+}
+
+type MenuPlacement = "down" | "up";
+type MenuState = {
+  openForId: string | null;
+  top: number;
+  left: number;
+  placement: MenuPlacement;
+};
+
+export default function ScreensPage() {
+  const [screens, setScreens] = React.useState<ScreenDto[]>([]);
+  const [isLoading, setIsLoading] = React.useState<boolean>(true);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [isPairModalOpen, setPairModalOpen] = React.useState(false);
+
+  const [menu, setMenu] = React.useState<MenuState>({
+    openForId: null,
+    top: 0,
+    left: 0,
+    placement: "down",
+  });
+
+  // keep refs to each 3-dots button so we can position a portal menu
+  const menuBtnRefs = React.useRef<Record<string, HTMLButtonElement | null>>({});
+
+  const query = useQuery();
+  const pairCodeFromUrl = query.get("pairCode")?.trim() || "";
+
+  const fetchScreens = React.useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const res = await fetch("/api/screens", { credentials: "include" });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `Failed to load screens (${res.status})`);
+      }
+
+      const data: ScreenDto[] = await res.json();
+      setScreens(Array.isArray(data) ? data : []);
+    } catch (err: any) {
+      console.error(err);
+      setError(err?.message || "Failed to load screens.");
+      setScreens([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    fetchScreens();
+  }, [fetchScreens]);
+
+  React.useEffect(() => {
+    if (pairCodeFromUrl) setPairModalOpen(true);
+  }, [pairCodeFromUrl]);
+
+  const handleLaunchVirtualScreen = React.useCallback(() => {
+    const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+    window.open(`/virtual-screen/${code}`, "_blank", "noopener,noreferrer");
+  }, []);
+
+  const handleDelete = React.useCallback(
+    async (screen: ScreenDto) => {
+      const confirmed = window.confirm("Are you sure you want to delete this screen?");
+      if (!confirmed) return;
+
+      try {
+        const res = await fetch(`/api/screens/${encodeURIComponent(screen.id)}`, {
+          method: "DELETE",
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `Failed to delete (${res.status})`);
+        }
+
+        await fetchScreens();
+      } catch (err: any) {
+        console.error(err);
+        window.alert(err?.message || "Failed to delete screen. Please try again.");
+      }
+    },
+    [fetchScreens]
+  );
+
+  const handleRename = React.useCallback(
+    async (screen: ScreenDto) => {
+      const currentName = screen.name || "Screen";
+      const nextName = window.prompt("Enter new screen name:", currentName);
+      if (!nextName || nextName.trim() === "" || nextName === currentName) return;
+
+      try {
+        const res = await fetch(`/api/screens/${encodeURIComponent(screen.id)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ name: nextName.trim() }),
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `Failed to rename (${res.status})`);
+        }
+
+        await fetchScreens();
+      } catch (err: any) {
+        console.error(err);
+        window.alert(err?.message || "Failed to rename screen. Please try again.");
+      }
+    },
+    [fetchScreens]
+  );
+
+  const handlePairSuccess = React.useCallback(async () => {
+    setPairModalOpen(false);
+    await fetchScreens();
+  }, [fetchScreens]);
+
+  const filteredScreens = React.useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return screens;
+    return screens.filter((s) => (s.name || "").toLowerCase().includes(q));
+  }, [screens, searchQuery]);
+
+  const formatLastSeen = (value?: string | null) => {
+    if (!value) return "Never";
+    const d = new Date(value);
+    return Number.isNaN(d.getTime()) ? "Never" : d.toLocaleString();
+  };
+
+  const statusClass = (status: string) => {
+    const upper = status.toUpperCase();
+    if (upper === "LIVE") return "screens-status-pill screens-status-pill--live";
+    if (upper === "PENDING") return "screens-status-pill screens-status-pill--pending";
+    return "screens-status-pill";
+  };
+
+  // Close menu on outside click / scroll / resize / escape
+  React.useEffect(() => {
+    function close() {
+      setMenu((m) => (m.openForId ? { ...m, openForId: null } : m));
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") close();
+    }
+    window.addEventListener("mousedown", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
+  function openMenuFor(screenId: string) {
+    const btn = menuBtnRefs.current[screenId];
+    if (!btn) return;
+
+    const r = btn.getBoundingClientRect();
+
+    const menuWidth = 190;
+    const menuHeight = 92; // 2 items * ~46px
+    const gap = 8;
+
+    const spaceBelow = window.innerHeight - r.bottom;
+    const placement: MenuPlacement = spaceBelow < (menuHeight + gap) ? "up" : "down";
+
+    const top =
+      placement === "down"
+        ? r.bottom + gap
+        : Math.max(8, r.top - gap - menuHeight);
+
+    // right-align with button, but keep inside viewport
+    const idealLeft = r.right - menuWidth;
+    const left = Math.min(Math.max(8, idealLeft), window.innerWidth - menuWidth - 8);
+
+    setMenu({
+      openForId: screenId,
+      top,
+      left,
+      placement,
+    });
+  }
+
+  const showEmptyCards =
+    !isLoading && !error && screens.length === 0 && searchQuery.trim() === "";
+
+  const menuPortal =
+    menu.openForId &&
+    createPortal(
+      <div
+        className="screens-portal-menu"
+        style={{ top: menu.top, left: menu.left }}
+        onMouseDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          className="screens-row-menu-item"
+          onClick={() => {
+            const s = screens.find((x) => x.id === menu.openForId);
+            setMenu((m) => ({ ...m, openForId: null }));
+            if (s) handleRename(s);
+          }}
+        >
+          Rename screen
+        </button>
+        <button
+          type="button"
+          className="screens-row-menu-item screens-row-menu-item--danger"
+          onClick={() => {
+            const s = screens.find((x) => x.id === menu.openForId);
+            setMenu((m) => ({ ...m, openForId: null }));
+            if (s) handleDelete(s);
+          }}
+        >
+          Delete screen
+        </button>
+      </div>,
+      document.body
+    );
+
+  return (
+    <div className="screens-page">
+      {menuPortal}
+
+      <div className="screens-header-row">
+        <div>
+          <h1 className="screens-title">Screens</h1>
+          <p className="screens-subtitle">
+            Manage your connected screens, players and virtual screens.
+          </p>
+        </div>
+      </div>
+
+      <div className="screens-toolbar">
+        <div className="screens-search">
+          <input
+            type="text"
+            placeholder="Search Screens"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <div className="screens-toolbar-actions">
+          <button type="button" className="screens-header-link" onClick={handleLaunchVirtualScreen}>
+            Launch virtual screen
+          </button>
+          <button
+            type="button"
+            className="screens-header-link"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPairModalOpen(true);
+            }}
+          >
+            Pair screen
+          </button>
+        </div>
+      </div>
+
+      {showEmptyCards ? (
+        <div className="screens-empty-cards-wrap">
+          <div className="screens-empty-cards-title">Okay, let's get a screen up and running</div>
+
+          <div className="screens-empty-cards">
+            <div className="screens-empty-card screens-empty-card--dark">
+              <div className="screens-empty-card-h">I know what I'm doing</div>
+              <div className="screens-empty-card-p">
+                I have a screen displaying a pairing code and I'm ready to connect.
+              </div>
+              <button
+                type="button"
+                className="screens-empty-card-btn"
+                onClick={() => setPairModalOpen(true)}
+              >
+                Pair your screen now
+              </button>
+            </div>
+
+            <div className="screens-empty-card screens-empty-card--gradient">
+              <div className="screens-empty-card-h">I just want to experiment with it</div>
+              <div className="screens-empty-card-p">
+                No screen, no problem! While you consider your hardware options, you can launch a
+                virtual screen to pair and display content on.
+              </div>
+              <button
+                type="button"
+                className="screens-empty-card-btn"
+                onClick={handleLaunchVirtualScreen}
+              >
+                Launch a Virtual Screen
+              </button>
+            </div>
+          </div>
+
+          <div className="screens-empty-video">
+            <div className="screens-empty-video-icon">▶</div>
+            <div className="screens-empty-video-body">
+              <div className="screens-empty-video-text">
+                To learn more about suitable hardware, let Nova guide you through your options in
+                this short, informative video.
+              </div>
+              <a className="screens-empty-video-link" href="#" onClick={(e) => e.preventDefault()}>
+                Look at hardware options
+              </a>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="screens-table-card">
+          <div className="screens-table-wrap">
+            <table className="screens-table">
+              <thead>
+                <tr>
+                  <th>Screen</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Last seen</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {isLoading ? (
+                  <tr>
+                    <td colSpan={5} className="screens-empty">
+                      Loading screens…
+                    </td>
+                  </tr>
+                ) : error ? (
+                  <tr>
+                    <td colSpan={5} className="screens-empty screens-error">
+                      {error}
+                    </td>
+                  </tr>
+                ) : filteredScreens.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="screens-empty">
+                      No screens yet.
+                    </td>
+                  </tr>
+                ) : (
+                  filteredScreens.map((screen) => (
+                    <tr key={screen.id} className="screens-row">
+                      <td className="screens-cell-name">{screen.name}</td>
+                      <td className="screens-cell-type">
+                        {screen.isVirtual ? "Virtual screen" : "Screen"}
+                      </td>
+                      <td className="screens-cell-status">
+                        <span className={statusClass(screen.status)}>
+                          {screen.status.toUpperCase() === "LIVE"
+                            ? "Live"
+                            : screen.status.toUpperCase() === "PENDING"
+                            ? "Pending"
+                            : screen.status}
+                        </span>
+                      </td>
+                      <td className="screens-cell-last-seen">{formatLastSeen(screen.lastSeenAt)}</td>
+                      <td className="screens-cell-actions">
+                        <button
+                          ref={(el) => {
+                            menuBtnRefs.current[screen.id] = el;
+                          }}
+                          type="button"
+                          className="screens-row-menu-trigger"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMenu((m) =>
+                              m.openForId === screen.id ? { ...m, openForId: null } : m
+                            );
+                            // open (or reposition) after state update
+                            setTimeout(() => openMenuFor(screen.id), 0);
+                          }}
+                          aria-label="Row actions"
+                        >
+                          <span />
+                          <span />
+                          <span />
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <PairScreenModal
+        open={isPairModalOpen}
+        onClose={() => setPairModalOpen(false)}
+        onSuccess={handlePairSuccess}
+        initialPairCode={pairCodeFromUrl}
+      />
+    </div>
+  );
+}
+

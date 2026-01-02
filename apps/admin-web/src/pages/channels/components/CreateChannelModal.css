@@ -1,0 +1,124 @@
+/* Generic modal shell used across these pages */
+.md-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+}
+.md-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.45);
+}
+.md-wrapper {
+  position: relative;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.md-content {
+  width: min(860px, 96vw);
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.25);
+  position: relative;
+}
+
+/* Close */
+.md-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  background: #fff;
+  cursor: pointer;
+  font-size: 20px;
+  line-height: 1;
+}
+
+/* Create Channel Modal */
+.ccm {
+  padding: 34px 46px 28px;
+  text-align: center;
+}
+.ccm-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  color: #111827;
+}
+.ccm-subtitle {
+  margin: 10px auto 0;
+  max-width: 640px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #6b7280;
+}
+
+.ccm-cover {
+  width: 96px;
+  height: 96px;
+  border-radius: 18px;
+  margin: 22px auto 18px;
+}
+
+.ccm-field {
+  margin-top: 6px;
+}
+.ccm-input {
+  width: min(520px, 86vw);
+  border: none;
+  outline: none;
+  font-size: 44px;
+  font-weight: 650;
+  text-align: center;
+  color: #111827;
+}
+.ccm-input::placeholder {
+  color: #9ca3af;
+}
+.ccm-input.is-invalid {
+  color: #b91c1c;
+}
+.ccm-underline {
+  width: min(520px, 86vw);
+  height: 2px;
+  background: #fbbf24;
+  margin: 10px auto 0;
+  border-radius: 999px;
+}
+
+.ccm-actions {
+  margin-top: 18px;
+  display: flex;
+  justify-content: center;
+}
+
+/* Buttons */
+.btn {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 650;
+}
+.btn-primary {
+  background: #fbbf24;
+  color: #111827;
+}
+.btn-primary:hover {
+  filter: brightness(0.98);
+}
+.btn-ghost {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #111827;
+}
+.btn-ghost:hover {
+  background: #f9fafb;
+}
+

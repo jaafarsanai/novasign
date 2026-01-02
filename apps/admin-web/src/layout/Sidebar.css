@@ -1,0 +1,133 @@
+.sb {
+  width: 260px;
+  min-width: 260px;
+  height: 100vh;
+  background: linear-gradient(180deg, #070b14, #050813);
+  color: #e5e7eb;
+  display: flex;
+  flex-direction: column;
+  padding: 14px 12px;
+}
+
+.sb-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 14px;
+}
+
+.sb-brand-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: #f2c200;
+  color: #111827;
+  display: grid;
+  place-items: center;
+  font-weight: 900;
+}
+
+.sb-brand-name {
+  font-weight: 800;
+  font-size: 14px;
+  color: #ffffff;
+}
+
+.sb-brand-space {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.sb-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 6px;
+  flex: 1;
+}
+
+.sb-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+
+.sb-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.sb-item--active {
+  background: #f2c200;
+  color: #111827;
+}
+
+.sb-icon {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+}
+
+.sb-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sb-footer {
+  padding: 10px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.sb-support {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: #ffffff;
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.sb-support:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.sb-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.sb-user-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+}
+
+.sb-user-name {
+  font-weight: 800;
+  font-size: 13px;
+  color: #ffffff;
+}
+
+.sb-user-email {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+}
+

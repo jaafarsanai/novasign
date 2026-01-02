@@ -1,0 +1,168 @@
+.channels-page {
+  padding: 22px;
+}
+
+.channels-toolbar {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 16px;
+  align-items: center;
+  background: #fff;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  padding: 14px 16px;
+}
+
+.channels-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #111827;
+}
+
+.channels-search {
+  position: relative;
+  width: min(720px, 100%);
+  margin: 0 auto;
+}
+.channels-search-icon {
+  position: absolute;
+  top: 50%;
+  left: 14px;
+  transform: translateY(-50%);
+  color: #9ca3af;
+  font-size: 14px;
+}
+.channels-search input {
+  width: 100%;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid #e5e7eb;
+  padding: 0 14px 0 34px;
+  outline: none;
+}
+
+.channels-alert {
+  margin-top: 14px;
+  border: 1px solid #f5c2c7;
+  background: #fff5f5;
+  color: #7f1d1d;
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.channels-alert-x {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  color: #7f1d1d;
+}
+
+.channels-body {
+  margin-top: 14px;
+  background: #fff;
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  min-height: 520px;
+  padding: 18px;
+}
+
+.channels-empty {
+  height: 520px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 8px;
+}
+.channels-empty-img {
+  width: 270px;
+  height: auto;
+  margin-bottom: 6px;
+}
+.channels-empty-title {
+  font-size: 22px;
+  font-weight: 650;
+  color: #111827;
+}
+.channels-empty-sub {
+  font-size: 13px;
+  color: #6b7280;
+  max-width: 520px;
+}
+
+.channels-list {
+  display: grid;
+  gap: 12px;
+}
+
+.channel-row {
+  border: 1px solid #eef2f7;
+  border-radius: 14px;
+  padding: 14px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 14px;
+  align-items: center;
+}
+
+.channel-cover {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+}
+
+.channel-meta .channel-name {
+  font-size: 16px;
+  font-weight: 650;
+  color: #111827;
+}
+.channel-meta .channel-sub {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 2px;
+}
+
+.channel-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.channel-actions-inline {
+  display: flex;
+  gap: 8px;
+}
+
+.btn.danger {
+  color: #b91c1c;
+}
+
+/* Buttons (keep consistent with your modals) */
+.btn {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-weight: 650;
+  background: #fff;
+  color: #111827;
+}
+.btn-primary {
+  background: #fbbf24;
+  color: #111827;
+}
+.btn-primary:hover {
+  filter: brightness(0.98);
+}
+.btn-ghost {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #111827;
+}
+.btn-ghost:hover {
+  background: #f9fafb;
+}
+
