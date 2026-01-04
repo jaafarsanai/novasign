@@ -1,92 +1,126 @@
-.com {
-  padding: 28px 34px 22px;
-  text-align: center;
-  width: min(900px, 96vw);
+/* Big ScreenCloud-like modal */
+.om-sc {
+  width: min(980px, 96vw);
+  min-height: 560px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.com-title {
+.om-body {
+  flex: 1 1 auto;
+  padding: 58px 64px 22px;
+  text-align: center;
+}
+
+.om-title {
   margin: 0;
-  font-size: 22px;
-  font-weight: 650;
+  font-size: 24px;
+  font-weight: 700;
   color: #111827;
 }
-.com-subtitle {
-  margin: 8px 0 18px;
+
+.om-subtitle {
+  margin: 10px 0 24px;
   font-size: 13px;
   color: #6b7280;
 }
 
-.com-grid {
+.om-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 18px;
+  gap: 22px;
   align-items: stretch;
+  margin-top: 8px;
 }
 
-.com-card {
+.om-card {
   border: 1px solid #e5e7eb;
-  border-radius: 14px;
-  padding: 18px;
+  border-radius: 10px;
+  padding: 22px;
   cursor: pointer;
   background: #fff;
 }
-.com-card input {
+
+.om-card input {
   display: none;
 }
-.com-card.is-selected {
-  outline: 2px solid rgba(17, 24, 39, 0.08);
+
+.om-card.is-selected {
+  background: #f3f4f6;
   border-color: #e5e7eb;
-  background: #f9fafb;
 }
 
-.com-visual {
+.om-visual {
   width: 100%;
-  height: 190px;
-  border-radius: 14px;
+  height: 260px;
+  border-radius: 10px;
   background-color: #f3f4f6;
   background-repeat: no-repeat;
   background-position: center;
-  background-size: 70% 70%;
+  background-size: 78% 78%;
 }
-.com-landscape {
+
+.om-landscape {
   background-image: url("/assets/icons/landscape.svg");
 }
-.com-portrait {
+
+.om-portrait {
   background-image: url("/assets/icons/portrait.svg");
 }
 
-.com-name {
-  margin-top: 12px;
+.om-name {
+  margin-top: 14px;
   display: inline-flex;
   gap: 10px;
   align-items: center;
-  font-weight: 650;
+  font-weight: 700;
   color: #111827;
 }
-.com-dot {
+
+.om-dot {
   width: 14px;
   height: 14px;
   border-radius: 999px;
   border: 2px solid #111827;
 }
-.com-card.is-selected .com-dot {
+
+.om-card.is-selected .om-dot {
   background: #111827;
 }
 
-.com-info {
-  margin: 16px auto 0;
-  max-width: 620px;
+.om-info {
+  margin: 22px auto 0;
+  max-width: 720px;
   background: #f3f4f6;
   color: #374151;
   font-size: 13px;
-  padding: 12px 14px;
-  border-radius: 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
 }
 
-.com-actions {
-  margin-top: 18px;
+/* Footer bar like ScreenCloud */
+.om-footer {
+  border-top: 1px solid #eef2f7;
+  padding: 18px 24px;
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.btn-ghost {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  color: #111827;
+}
+
+.btn-ghost:hover {
+  background: #f9fafb;
+}
+
+.om-create {
+  width: 220px;
+  height: 46px;
+  border-radius: 10px;
 }
 

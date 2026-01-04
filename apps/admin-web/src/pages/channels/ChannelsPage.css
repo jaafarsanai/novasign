@@ -130,39 +130,11 @@
   align-items: center;
 }
 
-.channel-actions-inline {
+.kebab {
   display: flex;
   gap: 8px;
 }
-
 .btn.danger {
   color: #b91c1c;
-}
-
-/* Buttons (keep consistent with your modals) */
-.btn {
-  height: 44px;
-  padding: 0 18px;
-  border-radius: 12px;
-  border: 1px solid transparent;
-  cursor: pointer;
-  font-weight: 650;
-  background: #fff;
-  color: #111827;
-}
-.btn-primary {
-  background: #fbbf24;
-  color: #111827;
-}
-.btn-primary:hover {
-  filter: brightness(0.98);
-}
-.btn-ghost {
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  color: #111827;
-}
-.btn-ghost:hover {
-  background: #f9fafb;
 }
 

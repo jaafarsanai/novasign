@@ -1,4 +1,4 @@
-/* Generic modal shell used across these pages */
+/* ===== Modal shell (shared) ===== */
 .md-modal {
   position: fixed;
   inset: 0;
@@ -7,118 +7,161 @@
 .md-backdrop {
   position: absolute;
   inset: 0;
-  background: rgba(17, 24, 39, 0.45);
+  background: rgba(17, 24, 39, 0.55);
 }
 .md-wrapper {
   position: relative;
   height: 100%;
   display: grid;
   place-items: center;
-  padding: 24px;
+  padding: 28px;
 }
 .md-content {
-  width: min(860px, 96vw);
   background: #fff;
-  border-radius: 14px;
-  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.25);
+  border-radius: 10px;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.35);
   position: relative;
+  overflow: hidden;
 }
 
 /* Close */
 .md-close {
   position: absolute;
-  top: 14px;
-  right: 14px;
-  width: 36px;
-  height: 36px;
+  top: 18px;
+  right: 18px;
+  width: 40px;
+  height: 40px;
   border-radius: 10px;
   border: 1px solid #e5e7eb;
   background: #fff;
   cursor: pointer;
-  font-size: 20px;
+  font-size: 22px;
   line-height: 1;
 }
 
-/* Create Channel Modal */
-.ccm {
-  padding: 34px 46px 28px;
+/* ===== ScreenCloud-like create modal ===== */
+.md-sc {
+  width: min(980px, 96vw);
+  min-height: 560px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sc-body {
+  flex: 1 1 auto;
+  padding: 58px 64px 20px;
   text-align: center;
 }
-.ccm-title {
+
+.sc-title {
   margin: 0;
-  font-size: 22px;
-  font-weight: 650;
+  font-size: 24px;
+  font-weight: 700;
   color: #111827;
 }
-.ccm-subtitle {
+
+.sc-subtitle {
   margin: 10px auto 0;
-  max-width: 640px;
+  max-width: 720px;
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.5;
   color: #6b7280;
 }
 
-.ccm-cover {
-  width: 96px;
-  height: 96px;
-  border-radius: 18px;
-  margin: 22px auto 18px;
+.sc-poster {
+  width: 140px;
+  height: 200px;
+  border-radius: 14px;
+  margin: 28px auto 18px;
+  position: relative;
+  overflow: hidden;
 }
 
-.ccm-field {
+.sc-poster-bars {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  height: 26px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+.sc-bar {
+  height: 14px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.35);
+}
+.sc-bar-1 {
+  height: 16px;
+}
+.sc-bar-2 {
+  width: 22px;
+  height: 16px;
+}
+.sc-bar-3 {
+  display: none;
+}
+
+.sc-input-wrap {
   margin-top: 6px;
 }
-.ccm-input {
-  width: min(520px, 86vw);
+
+.sc-input {
+  width: min(620px, 90vw);
   border: none;
   outline: none;
-  font-size: 44px;
-  font-weight: 650;
+  font-size: 52px;
+  font-weight: 750;
   text-align: center;
   color: #111827;
 }
-.ccm-input::placeholder {
+
+.sc-input::placeholder {
   color: #9ca3af;
 }
-.ccm-input.is-invalid {
+.sc-input.is-invalid {
   color: #b91c1c;
 }
-.ccm-underline {
-  width: min(520px, 86vw);
+
+.sc-underline {
+  width: min(620px, 90vw);
   height: 2px;
   background: #fbbf24;
-  margin: 10px auto 0;
+  margin: 12px auto 0;
   border-radius: 999px;
 }
 
-.ccm-actions {
-  margin-top: 18px;
+/* Footer like ScreenCloud */
+.sc-footer {
+  border-top: 1px solid #eef2f7;
+  padding: 18px 24px;
   display: flex;
   justify-content: center;
 }
 
-/* Buttons */
 .btn {
   height: 44px;
   padding: 0 18px;
   border-radius: 12px;
   border: 1px solid transparent;
   cursor: pointer;
-  font-weight: 650;
+  font-weight: 700;
 }
+
 .btn-primary {
   background: #fbbf24;
   color: #111827;
 }
+
 .btn-primary:hover {
   filter: brightness(0.98);
 }
-.btn-ghost {
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  color: #111827;
-}
-.btn-ghost:hover {
-  background: #f9fafb;
+
+.sc-primary {
+  width: min(560px, 80vw);
+  height: 46px;
+  border-radius: 10px;
 }
 

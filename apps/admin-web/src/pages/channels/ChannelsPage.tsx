@@ -25,9 +25,9 @@ function hashToInt(s: string) {
 /** Stable cover from channel id (no backend required). */
 function coverFromId(id: string) {
   const palette: Array<[string, string]> = [
-    ["#f97316", "#ef4444"],
-    ["#0ea5e9", "#6366f1"],
     ["#22c55e", "#14b8a6"],
+    ["#0ea5e9", "#6366f1"],
+    ["#f97316", "#ef4444"],
     ["#a855f7", "#3b82f6"],
     ["#f59e0b", "#f97316"],
     ["#10b981", "#0ea5e9"],
@@ -39,7 +39,6 @@ function coverFromId(id: string) {
   return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
 }
 
-/** Lightweight, Vite-friendly API wrapper */
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
@@ -75,20 +74,6 @@ export default function ChannelsPage() {
   const [draftName, setDraftName] = useState("New Channel");
   const [draftOrientation, setDraftOrientation] = useState<Orientation>("landscape");
 
-  const draftThumbBg = useMemo(() => {
-    // stable thumb while channel doesn't have an id yet (based on draft name)
-    const palette: Array<[string, string]> = [
-      ["#0ea5e9", "#6366f1"],
-      ["#22c55e", "#14b8a6"],
-      ["#f59e0b", "#f97316"],
-      ["#a855f7", "#3b82f6"],
-      ["#ef4444", "#f43f5e"],
-    ];
-    const idx = hashToInt(draftName || "New Channel") % palette.length;
-    const [a, b] = palette[idx];
-    return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
-  }, [draftName]);
-
   async function load() {
     setLoading(true);
     setError(null);
@@ -121,10 +106,8 @@ export default function ChannelsPage() {
       });
       const created = r.item;
       setItems((prev) => [created, ...prev]);
-
       setCreateOpen(false);
       setOrientationOpen(false);
-
       nav(`/channels/${created.id}`);
     } catch (e: any) {
       setError(`Channels API is not reachable (POST /api/channels failed). ${e?.message ?? ""}`.trim());
@@ -196,14 +179,7 @@ export default function ChannelsPage() {
             <div className="channels-empty-sub">
               Add content and playlists, schedule what plays when and give everyone a voice.
             </div>
-            <button
-              className="btn btn-ghost"
-              onClick={() => {
-                setDraftName("New Channel");
-                setDraftOrientation("landscape");
-                setCreateOpen(true);
-              }}
-            >
+            <button className="btn btn-ghost" onClick={() => setCreateOpen(true)}>
               Create New Channel
             </button>
           </div>
@@ -222,7 +198,7 @@ export default function ChannelsPage() {
                     Open
                   </button>
 
-                  <div className="channel-actions-inline">
+                  <div className="kebab">
                     <button className="btn btn-ghost" onClick={() => duplicateChannel(c.id)}>
                       Duplicate
                     </button>
@@ -243,11 +219,9 @@ export default function ChannelsPage() {
         onChange={setDraftName}
         onClose={() => setCreateOpen(false)}
         onContinue={() => {
-          setDraftOrientation("landscape");
           setCreateOpen(false);
           setOrientationOpen(true);
         }}
-        thumbBg={draftThumbBg}
       />
 
       <ChooseOrientationModal
