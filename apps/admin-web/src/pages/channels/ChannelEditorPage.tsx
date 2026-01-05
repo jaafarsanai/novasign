@@ -110,7 +110,11 @@ function useShowingOutsideClick<T extends HTMLElement>(
  * Key requirement: modal scroll + show all.
  */
 const ALL_LAYOUTS: LayoutDef[] = [
-  { id: "layout_main", name: "Main", zones: [{ id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 100 }] },
+  {
+    id: "layout_main",
+    name: "Main",
+    zones: [{ id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 100 }],
+  },
   {
     id: "layout_main_footer",
     name: "Main + Footer",
@@ -240,68 +244,116 @@ const ALL_LAYOUTS: LayoutDef[] = [
       { id: "z2", name: "Right 1", x: 78, y: 0, w: 22, h: 33.33 },
       { id: "z3", name: "Right 2", x: 78, y: 33.33, w: 22, h: 33.33 },
       { id: "z4", name: "Right 3", x: 78, y: 66.66, w: 22, h: 33.34 },
-      { id: "z5", name: "Header", x: 0, y: 0, w: 100, h: 0 }, // kept to keep ID naming stable; filtered below
+      { id: "z5", name: "Header", x: 0, y: 0, w: 100, h: 0 }, // filtered below
     ].filter((z) => z.w > 0 && z.h > 0),
   },
 
-  { id: "layout_main_upper", name: "Main + Upper Pane", zones: [
-    { id: "z1", name: "Upper Pane", x: 0, y: 0, w: 100, h: 22 },
-    { id: "z2", name: "Main Zone", x: 0, y: 22, w: 100, h: 78 },
-  ]},
-  { id: "layout_main_lower", name: "Main + Lower Pane", zones: [
-    { id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 78 },
-    { id: "z2", name: "Lower Pane", x: 0, y: 78, w: 100, h: 22 },
-  ]},
-  { id: "layout_video_frame", name: "Video Frame", zones: [
-    { id: "z1", name: "Main Zone", x: 8, y: 10, w: 84, h: 80 },
-    { id: "z2", name: "Frame", x: 0, y: 0, w: 100, h: 100 },
-  ]},
-  { id: "layout_ticker", name: "1 Main Zone + Ticker", zones: [
-    { id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 84 },
-    { id: "z2", name: "Tickertape", x: 0, y: 84, w: 100, h: 16 },
-  ]},
-  { id: "layout_left_triple_bar", name: "Main + Left Triple Bar", zones: [
-    { id: "z1", name: "Left 1", x: 0, y: 0, w: 22, h: 33.33 },
-    { id: "z2", name: "Left 2", x: 0, y: 33.33, w: 22, h: 33.33 },
-    { id: "z3", name: "Left 3", x: 0, y: 66.66, w: 22, h: 33.34 },
-    { id: "z4", name: "Main Zone", x: 22, y: 0, w: 78, h: 100 },
-  ]},
-  { id: "layout_right_triple_bar", name: "Main + Right Triple Bar", zones: [
-    { id: "z1", name: "Main Zone", x: 0, y: 0, w: 78, h: 100 },
-    { id: "z2", name: "Right 1", x: 78, y: 0, w: 22, h: 33.33 },
-    { id: "z3", name: "Right 2", x: 78, y: 33.33, w: 22, h: 33.33 },
-    { id: "z4", name: "Right 3", x: 78, y: 66.66, w: 22, h: 33.34 },
-  ]},
-  { id: "layout_split_v_footer", name: "Split Vertically + Footer", zones: [
-    { id: "z1", name: "Left", x: 0, y: 0, w: 50, h: 80 },
-    { id: "z2", name: "Right", x: 50, y: 0, w: 50, h: 80 },
-    { id: "z3", name: "Footer", x: 0, y: 80, w: 100, h: 20 },
-  ]},
-  { id: "layout_split_h_right", name: "Split Horizontally + Right Bar", zones: [
-    { id: "z1", name: "Top", x: 0, y: 0, w: 76, h: 50 },
-    { id: "z2", name: "Bottom", x: 0, y: 50, w: 76, h: 50 },
-    { id: "z3", name: "Right Bar", x: 76, y: 0, w: 24, h: 100 },
-  ]},
-  { id: "layout_picture_in_picture", name: "Picture-in-Picture", zones: [
-    { id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 100 },
-    { id: "z2", name: "Widget", x: 72, y: 8, w: 24, h: 24 },
-  ]},
-  { id: "layout_quadrants", name: "4 Quadrants", zones: [
-    { id: "z1", name: "Top Left", x: 0, y: 0, w: 50, h: 50 },
-    { id: "z2", name: "Top Right", x: 50, y: 0, w: 50, h: 50 },
-    { id: "z3", name: "Bottom Left", x: 0, y: 50, w: 50, h: 50 },
-    { id: "z4", name: "Bottom Right", x: 50, y: 50, w: 50, h: 50 },
-  ]},
-  { id: "layout_header_main_footer", name: "Header + Main + Footer", zones: [
-    { id: "z1", name: "Header", x: 0, y: 0, w: 100, h: 18 },
-    { id: "z2", name: "Main Zone", x: 0, y: 18, w: 100, h: 64 },
-    { id: "z3", name: "Footer", x: 0, y: 82, w: 100, h: 18 },
-  ]},
-  { id: "layout_header_split", name: "Header + Split", zones: [
-    { id: "z1", name: "Header", x: 0, y: 0, w: 100, h: 18 },
-    { id: "z2", name: "Left", x: 0, y: 18, w: 50, h: 82 },
-    { id: "z3", name: "Right", x: 50, y: 18, w: 50, h: 82 },
-  ]},
+  {
+    id: "layout_main_upper",
+    name: "Main + Upper Pane",
+    zones: [
+      { id: "z1", name: "Upper Pane", x: 0, y: 0, w: 100, h: 22 },
+      { id: "z2", name: "Main Zone", x: 0, y: 22, w: 100, h: 78 },
+    ],
+  },
+  {
+    id: "layout_main_lower",
+    name: "Main + Lower Pane",
+    zones: [
+      { id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 78 },
+      { id: "z2", name: "Lower Pane", x: 0, y: 78, w: 100, h: 22 },
+    ],
+  },
+  {
+    id: "layout_video_frame",
+    name: "Video Frame",
+    zones: [
+      { id: "z1", name: "Main Zone", x: 8, y: 10, w: 84, h: 80 },
+      { id: "z2", name: "Frame", x: 0, y: 0, w: 100, h: 100 },
+    ],
+  },
+  {
+    id: "layout_ticker",
+    name: "1 Main Zone + Ticker",
+    zones: [
+      { id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 84 },
+      { id: "z2", name: "Tickertape", x: 0, y: 84, w: 100, h: 16 },
+    ],
+  },
+  {
+    id: "layout_left_triple_bar",
+    name: "Main + Left Triple Bar",
+    zones: [
+      { id: "z1", name: "Left 1", x: 0, y: 0, w: 22, h: 33.33 },
+      { id: "z2", name: "Left 2", x: 0, y: 33.33, w: 22, h: 33.33 },
+      { id: "z3", name: "Left 3", x: 0, y: 66.66, w: 22, h: 33.34 },
+      { id: "z4", name: "Main Zone", x: 22, y: 0, w: 78, h: 100 },
+    ],
+  },
+  {
+    id: "layout_right_triple_bar",
+    name: "Main + Right Triple Bar",
+    zones: [
+      { id: "z1", name: "Main Zone", x: 0, y: 0, w: 78, h: 100 },
+      { id: "z2", name: "Right 1", x: 78, y: 0, w: 22, h: 33.33 },
+      { id: "z3", name: "Right 2", x: 78, y: 33.33, w: 22, h: 33.33 },
+      { id: "z4", name: "Right 3", x: 78, y: 66.66, w: 22, h: 33.34 },
+    ],
+  },
+  {
+    id: "layout_split_v_footer",
+    name: "Split Vertically + Footer",
+    zones: [
+      { id: "z1", name: "Left", x: 0, y: 0, w: 50, h: 80 },
+      { id: "z2", name: "Right", x: 50, y: 0, w: 50, h: 80 },
+      { id: "z3", name: "Footer", x: 0, y: 80, w: 100, h: 20 },
+    ],
+  },
+  {
+    id: "layout_split_h_right",
+    name: "Split Horizontally + Right Bar",
+    zones: [
+      { id: "z1", name: "Top", x: 0, y: 0, w: 76, h: 50 },
+      { id: "z2", name: "Bottom", x: 0, y: 50, w: 76, h: 50 },
+      { id: "z3", name: "Right Bar", x: 76, y: 0, w: 24, h: 100 },
+    ],
+  },
+  {
+    id: "layout_picture_in_picture",
+    name: "Picture-in-Picture",
+    zones: [
+      { id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 100 },
+      { id: "z2", name: "Widget", x: 72, y: 8, w: 24, h: 24 },
+    ],
+  },
+  {
+    id: "layout_quadrants",
+    name: "4 Quadrants",
+    zones: [
+      { id: "z1", name: "Top Left", x: 0, y: 0, w: 50, h: 50 },
+      { id: "z2", name: "Top Right", x: 50, y: 0, w: 50, h: 50 },
+      { id: "z3", name: "Bottom Left", x: 0, y: 50, w: 50, h: 50 },
+      { id: "z4", name: "Bottom Right", x: 50, y: 50, w: 50, h: 50 },
+    ],
+  },
+  {
+    id: "layout_header_main_footer",
+    name: "Header + Main + Footer",
+    zones: [
+      { id: "z1", name: "Header", x: 0, y: 0, w: 100, h: 18 },
+      { id: "z2", name: "Main Zone", x: 0, y: 18, w: 100, h: 64 },
+      { id: "z3", name: "Footer", x: 0, y: 82, w: 100, h: 18 },
+    ],
+  },
+  {
+    id: "layout_header_split",
+    name: "Header + Split",
+    zones: [
+      { id: "z1", name: "Header", x: 0, y: 0, w: 100, h: 18 },
+      { id: "z2", name: "Left", x: 0, y: 18, w: 50, h: 82 },
+      { id: "z3", name: "Right", x: 50, y: 18, w: 50, h: 82 },
+    ],
+  },
 ];
 
 type DimensionPreset = { label: string; w: number; h: number };
@@ -315,47 +367,140 @@ const DIM_PRESETS: DimensionPreset[] = [
   { label: "iPhone X (812 × 375)", w: 812, h: 375 },
 ];
 
-function px(n: number) {
-  return `${Math.round(n)}px`;
+function ChannelSizeModal({
+  open,
+  value,
+  presets,
+  onChange,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  current: { w: number; h: number }; // kept for signature compatibility (unused)
+  value: { w: number; h: number };
+  presets: Array<{ label: string; w: number; h: number }>;
+  onChange: (v: { w: number; h: number }) => void;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  if (!open) return null;
+
+  const selectedKey = `${value.w}x${value.h}`;
+  const hasPreset = presets.some((p) => `${p.w}x${p.h}` === selectedKey);
+
+  return (
+    <div className="dim-backdrop" role="dialog" aria-modal="true">
+      <div className="dim-modal">
+        <div className="dim-header">
+          <div className="dim-title">Channel Size</div>
+          <button className="dim-close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </div>
+
+        <div className="dim-body">
+          <div className="ce-field">
+            <select
+              value={hasPreset ? selectedKey : "__custom__"}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "__custom__") return;
+                const [wStr, hStr] = v.split("x");
+                onChange({ w: Number(wStr), h: Number(hStr) });
+              }}
+            >
+              {presets.map((p) => (
+                <option key={`${p.w}x${p.h}`} value={`${p.w}x${p.h}`}>
+                  {p.label}
+                </option>
+              ))}
+              {!hasPreset && <option value="__custom__">{`Custom (${value.w} × ${value.h})`}</option>}
+            </select>
+          </div>
+
+          <div className="ce-note">
+            Please note, changing the Channel Size will affect content already playing on your screen(s). Are you sure you
+            want to continue?
+          </div>
+        </div>
+
+        <div className="dim-footer">
+          <button className="btn btn-ghost" onClick={onClose}>
+            Not Now
+          </button>
+          <button className="btn btn-primary" onClick={onConfirm}>
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function LayoutThumb({
   layout,
   width,
   height,
+  activeZoneId,
   onHover,
+  onZoneHoverId,
+  onZoneSelectId,
+  showBadges = true,
 }: {
   layout: LayoutDef;
   width: number;
   height: number;
+  activeZoneId?: string;
   onHover: (txt: string | null, x: number, y: number) => void;
+  onZoneHoverId?: (id: string | null) => void;
+  onZoneSelectId?: (id: string) => void;
+  showBadges?: boolean;
 }) {
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
   return (
     <div className="ce-layout-thumb">
-      {layout.zones.map((z, idx) => (
-        <div
-          key={z.id}
-          className="ce-zone"
-          style={{
-            left: `${z.x}%`,
-            top: `${z.y}%`,
-            width: `${z.w}%`,
-            height: `${z.h}%`,
-          }}
-          onMouseEnter={(e) => {
-            const pxW = Math.round((z.w / 100) * width);
-            const pxH = Math.round((z.h / 100) * height);
-            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-            onHover(`w:${pxW}\nh:${pxH}`, rect.left + rect.width / 2, rect.top);
-          }}
-          onMouseLeave={() => onHover(null, 0, 0)}
-        >
-          <div className="ce-zone-badge">{idx + 1}</div>
-        </div>
-      ))}
+      {layout.zones.map((z, idx) => {
+        const isActive = activeZoneId === z.id;
+        const isHover = hoverId === z.id;
+
+        return (
+          <div
+            key={z.id}
+            className={`ce-zone ${isActive ? "is-active" : ""} ${isHover ? "is-hover" : ""}`}
+            style={{
+              left: `${z.x}%`,
+              top: `${z.y}%`,
+              width: `${z.w}%`,
+              height: `${z.h}%`,
+            }}
+            onMouseEnter={(e) => {
+              setHoverId(z.id);
+              onZoneHoverId?.(z.id);
+
+              const pxW = Math.round((z.w / 100) * width);
+              const pxH = Math.round((z.h / 100) * height);
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              onHover(`w:${pxW}\nh:${pxH}`, rect.left + rect.width / 2, rect.top);
+            }}
+            onMouseLeave={() => {
+              setHoverId(null);
+              onZoneHoverId?.(null);
+              onHover(null, 0, 0);
+            }}
+            onClick={(e) => {
+             e.stopPropagation();
+             onZoneSelectId?.(z.id);
+	   }}
+          >
+            {showBadges && <div className="ce-zone-badge">{idx + 1}</div>}
+          </div>
+        );
+      })}
     </div>
   );
 }
+
 
 function ChooseLayoutModal({
   open,
@@ -386,7 +531,7 @@ function ChooseLayoutModal({
 
   if (!open) return null;
 
-  const shown = tab === "all" ? layouts : []; // custom layouts later
+  const shown = tab === "all" ? layouts : [];
 
   return (
     <div className="clm-backdrop" role="dialog" aria-modal="true">
@@ -394,7 +539,9 @@ function ChooseLayoutModal({
         <div className="clm-header">
           <div className="clm-title-row">
             <div className="clm-title">Choose Layout</div>
-            <button className="clm-close" onClick={onClose} aria-label="Close">×</button>
+            <button className="clm-close" onClick={onClose} aria-label="Close">
+              ×
+            </button>
           </div>
 
           <div className="clm-tabs">
@@ -416,7 +563,7 @@ function ChooseLayoutModal({
                 onClick={() => setPicked(l.id)}
                 type="button"
               >
-                <LayoutThumb layout={l} width={width} height={height} onHover={(txt, x, y) => setHover({ txt, x, y })} />
+                <LayoutThumb layout={l} width={width} height={height} onHover={(txt, x, y) => setHover({ txt, x, y })} showBadges={false} />
                 <div className="layout-name">{l.name}</div>
               </button>
             ))}
@@ -424,82 +571,21 @@ function ChooseLayoutModal({
         </div>
 
         <div className="clm-footer">
-          <button className="btn btn-ghost" onClick={onCustomize}>Customize</button>
-          <button className="btn btn-primary" onClick={() => onSelect(picked)}>Select</button>
+          <button className="btn btn-ghost" onClick={onCustomize}>
+            Customize
+          </button>
+          <button className="btn btn-primary" onClick={() => onSelect(picked)}>
+            Select
+          </button>
         </div>
 
         {hover.txt && (
-          <div
-            className="ce-hover-tip"
-            style={{ left: hover.x, top: hover.y }}
-          >
+          <div className="ce-hover-tip" style={{ left: hover.x, top: hover.y }}>
             {hover.txt.split("\n").map((line) => (
               <div key={line}>{line}</div>
             ))}
           </div>
         )}
-      </div>
-    </div>
-  );
-}
-
-function DimensionModal({
-  open,
-  current,
-  onClose,
-  onPick,
-}: {
-  open: boolean;
-  current: { w: number; h: number };
-  onClose: () => void;
-  onPick: (w: number, h: number) => void;
-}) {
-  const [picked, setPicked] = useState(`${current.w}x${current.h}`);
-
-  useEffect(() => {
-    if (open) setPicked(`${current.w}x${current.h}`);
-  }, [open, current.w, current.h]);
-
-  if (!open) return null;
-
-  return (
-    <div className="dim-backdrop" role="dialog" aria-modal="true">
-      <div className="dim-modal">
-        <div className="dim-header">
-          <div className="dim-title">Choose Dimension</div>
-          <button className="dim-close" onClick={onClose} aria-label="Close">×</button>
-        </div>
-
-        <div className="dim-body">
-          {DIM_PRESETS.map((p) => {
-            const id = `${p.w}x${p.h}`;
-            return (
-              <label key={id} className={`dim-row ${picked === id ? "is-selected" : ""}`}>
-                <input
-                  type="radio"
-                  name="dim"
-                  value={id}
-                  checked={picked === id}
-                  onChange={() => setPicked(id)}
-                />
-                <div className="dim-label">{p.label}</div>
-              </label>
-            );
-          })}
-        </div>
-
-        <div className="dim-footer">
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
-          <button
-            className="btn btn-primary"
-            onClick={() => {
-              const [w, h] = picked.split("x").map((x) => parseInt(x, 10));
-              onPick(w, h);
-            }}
-          >
-            Apply
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -518,17 +604,16 @@ export default function ChannelEditorPage() {
 
   const [channel, setChannel] = useState<Channel | null>(null);
 
-  // local UI state (can be persisted later)
   const [layoutId, setLayoutId] = useState<string>("layout_main");
   const [width, setWidth] = useState<number>(1920);
   const [height, setHeight] = useState<number>(1080);
 
   const [activeZoneId, setActiveZoneId] = useState<string>("z1");
+  const [hoverZoneId, setHoverZoneId] = useState<string | null>(null);
 
   const [panelTab, setPanelTab] = useState<"layout" | "settings">("layout");
 
   const [layoutModalOpen, setLayoutModalOpen] = useState(false);
-  const [dimModalOpen, setDimModalOpen] = useState(false);
 
   // top-right more menu
   const [moreOpen, setMoreOpen] = useState(false);
@@ -536,6 +621,10 @@ export default function ChannelEditorPage() {
   useShowingOutsideClick(moreRef, () => setMoreOpen(false));
 
   const [hover, setHover] = useState<{ txt: string | null; x: number; y: number }>({ txt: null, x: 0, y: 0 });
+
+  // Channel size modal
+  const [channelSizeOpen, setChannelSizeOpen] = useState(false);
+  const [pendingDim, setPendingDim] = useState<{ w: number; h: number }>({ w: 1920, h: 1080 });
 
   // transitions per zone (including background audio pseudo-zone)
   const [zoneTransitions, setZoneTransitions] = useState<Record<string, ZoneTransition>>({
@@ -548,12 +637,8 @@ export default function ChannelEditorPage() {
   }, [layoutId]);
 
   const zones = useMemo(() => {
-    // ScreenCloud shows "Background Audio" as a special item
     const base = layout.zones.map((z) => ({ ...z }));
-    return [
-      ...base,
-      { id: "background_audio", name: "Background Audio", x: 0, y: 0, w: 0, h: 0 },
-    ];
+    return [...base, { id: "background_audio", name: "Background Audio", x: 0, y: 0, w: 0, h: 0 }];
   }, [layout.zones]);
 
   const activeZone = useMemo(() => zones.find((z) => z.id === activeZoneId) ?? zones[0], [zones, activeZoneId]);
@@ -579,13 +664,10 @@ export default function ChannelEditorPage() {
     setLoading(true);
     setError(null);
     try {
-      // You can adjust this response shape to match your backend
-      // Expected: { item: Channel }
       const r = await apiJson<{ item: Channel }>(`/api/channels/${id}`);
       const ch = r.item;
       setChannel(ch);
 
-      // if backend returns width/height/layoutId, use them; else keep defaults
       setLayoutId(ch.layoutId || "layout_main");
       setWidth(ch.width || 1920);
       setHeight(ch.height || 1080);
@@ -634,10 +716,10 @@ export default function ChannelEditorPage() {
         </div>
 
         <div className="ce-actions">
-          <button className="btn btn-ghost" onClick={() => { /* later */ }}>
+          <button className="btn btn-ghost" onClick={() => {}}>
             Preview
           </button>
-          <button className="btn btn-primary" onClick={() => { /* later */ }}>
+          <button className="btn btn-primary" onClick={() => {}}>
             Publish
           </button>
 
@@ -648,19 +730,19 @@ export default function ChannelEditorPage() {
 
             {moreOpen && (
               <div className="ce-menu">
-                <button className="ce-menu-item" onClick={() => setMoreOpen(false)}>Duplicate</button>
-                <button className="ce-menu-item danger" onClick={() => setMoreOpen(false)}>Delete</button>
+                <button className="ce-menu-item" onClick={() => setMoreOpen(false)}>
+                  Duplicate
+                </button>
+                <button className="ce-menu-item danger" onClick={() => setMoreOpen(false)}>
+                  Delete
+                </button>
               </div>
             )}
           </div>
         </div>
       </div>
 
-      {error && (
-        <div className="ce-alert">
-          {error}
-        </div>
-      )}
+      {error && <div className="ce-alert">{error}</div>}
 
       <div className="ce-grid">
         <div className="ce-main">
@@ -668,22 +750,23 @@ export default function ChannelEditorPage() {
             <div className="ce-selects">
               <div className="ce-select">
                 <select value={activeZoneId} onChange={(e) => setActiveZoneId(e.target.value)}>
-                  {zones.map((z) => (
+                  {layout.zones.map((z) => (
                     <option key={z.id} value={z.id}>
                       {z.name}
                     </option>
                   ))}
+		<option value="background_audio">Background Audio</option>
                 </select>
               </div>
 
               <div className="ce-select">
-                <select value={"fill"} onChange={() => { /* reserved (Fill Zone) */ }}>
+                <select value={"fill"} onChange={() => {}}>
                   <option value="fill">Fill Zone</option>
                 </select>
               </div>
             </div>
 
-            <button className="btn btn-ghost" onClick={() => { /* later */ }}>
+            <button className="btn btn-ghost" onClick={() => {}}>
               + Add Content
             </button>
           </div>
@@ -694,7 +777,7 @@ export default function ChannelEditorPage() {
             <div className="ce-empty-sub">
               Add your playlists or individual pieces of content and schedule them for something great.
             </div>
-            <button className="btn btn-ghost" onClick={() => { /* later */ }}>
+            <button className="btn btn-ghost" onClick={() => {}}>
               Add Content
             </button>
           </div>
@@ -724,22 +807,29 @@ export default function ChannelEditorPage() {
                   <div className="ce-dim-value">{dimLabel}</div>
                 </div>
 
-                <button className="btn btn-ghost" onClick={() => setDimModalOpen(true)}>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    setChannelSizeOpen(true);
+                    setPendingDim({ w: width, h: height });
+                  }}
+                >
                   Change
                 </button>
               </div>
 
               <div className="ce-layout-preview">
-                <div
-                  className="ce-layout-thumb-wrap"
-                  onMouseLeave={() => setHover({ txt: null, x: 0, y: 0 })}
-                >
+                <div className="ce-layout-thumb-wrap" onMouseLeave={() => setHover({ txt: null, x: 0, y: 0 })}>
                   <LayoutThumb
                     layout={layout}
                     width={width}
                     height={height}
+                    activeZoneId={hoverZoneId ?? (activeZoneId === "background_audio" ? undefined : activeZoneId)}
                     onHover={(txt, x, y) => setHover({ txt, x, y })}
-                  />
+                    onZoneHoverId={setHoverZoneId}
+		    onZoneSelectId={(id) => setActiveZoneId(id)}
+                	showBadges={false}  
+		/>
                 </div>
 
                 <button className="btn btn-ghost" onClick={() => setLayoutModalOpen(true)}>
@@ -757,11 +847,16 @@ export default function ChannelEditorPage() {
                   </div>
                   <div className="ce-zone-name">{activeZone.name}</div>
                 </div>
+
+                {activeZoneId === "background_audio" && (
+                  <div className="ce-bg-audio-hint">
+                    This zone allows for audio playing in the background. Adding video or any content with visuals in this
+                    zone, will play the audio-only.
+                  </div>
+                )}
               </div>
 
-              <div className="ce-tip">
-                Tip: Hover zones in the preview to see pixel dimensions.
-              </div>
+              <div className="ce-tip">Tip: Hover zones in the preview to see pixel dimensions.</div>
             </div>
           ) : (
             <div className="ce-side-section">
@@ -848,9 +943,7 @@ export default function ChannelEditorPage() {
                 </div>
               </div>
 
-              <div className="ce-tip">
-                Next step: apply these transition settings when rendering zone content playback.
-              </div>
+              <div className="ce-tip">Next step: apply these transition settings when rendering zone content playback.</div>
             </div>
           )}
         </div>
@@ -864,6 +957,21 @@ export default function ChannelEditorPage() {
         </div>
       )}
 
+      <ChannelSizeModal
+        open={channelSizeOpen}
+        current={{ w: width, h: height }}
+        value={pendingDim}
+        presets={DIM_PRESETS}
+        onChange={(next) => setPendingDim(next)}
+        onClose={() => setChannelSizeOpen(false)}
+        onConfirm={() => {
+          setWidth(pendingDim.w);
+          setHeight(pendingDim.h);
+          setChannel((prev) => (prev ? { ...prev, width: pendingDim.w, height: pendingDim.h } : prev));
+          setChannelSizeOpen(false);
+        }}
+      />
+
       <ChooseLayoutModal
         open={layoutModalOpen}
         layouts={ALL_LAYOUTS}
@@ -876,19 +984,7 @@ export default function ChannelEditorPage() {
           setLayoutModalOpen(false);
         }}
         onCustomize={() => {
-          // placeholder; later opens layout designer
           setLayoutModalOpen(false);
-        }}
-      />
-
-      <DimensionModal
-        open={dimModalOpen}
-        current={{ w: width, h: height }}
-        onClose={() => setDimModalOpen(false)}
-        onPick={(w, h) => {
-          setWidth(w);
-          setHeight(h);
-          setDimModalOpen(false);
         }}
       />
     </div>
