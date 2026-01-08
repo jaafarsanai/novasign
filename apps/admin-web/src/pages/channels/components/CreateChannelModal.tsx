@@ -1,13 +1,31 @@
-import React, { useMemo, useState } from "react";
+// admin-web/src/pages/channels/components/CreateChannelModal.tsx
+import React, { useEffect, useMemo, useState } from "react";
 import "./CreateChannelModal.css";
+import { coverFromSeed } from "../channelCover";
 
 export type CreateChannelModalProps = {
   open: boolean;
   value: string;
   onChange: React.Dispatch<React.SetStateAction<string>>;
   onClose: () => void;
-  onContinue: () => void;
+
+  /**
+   * We pass a coverSeed so ChannelsPage can persist it
+   * after the backend returns the created channel id.
+   */
+  onContinue: (coverSeed: string) => void;
 };
+
+function makeSeed() {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const c: any = window.crypto;
+    if (c?.randomUUID) return c.randomUUID();
+  } catch {
+    // ignore
+  }
+  return `seed_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
 
 export default function CreateChannelModal({
   open,
@@ -17,15 +35,20 @@ export default function CreateChannelModal({
   onContinue,
 }: CreateChannelModalProps) {
   const [touched, setTouched] = useState(false);
+  const [coverSeed, setCoverSeed] = useState<string>("");
+
+  useEffect(() => {
+    if (!open) return;
+    setCoverSeed(makeSeed());
+    setTouched(false);
+  }, [open]);
 
   const trimmed = value.trim();
   const invalid = touched && trimmed.length === 0;
 
-  // ScreenCloud-like “poster” look (green default)
-  const posterBg = useMemo(
-    () => "linear-gradient(180deg, #16a34a 0%, #22c55e 45%, #0f766e 100%)",
-    []
-  );
+  const posterBg = useMemo(() => {
+    return coverFromSeed(coverSeed || "seed");
+  }, [coverSeed]);
 
   if (!open) return null;
 
@@ -72,7 +95,7 @@ export default function CreateChannelModal({
               onClick={() => {
                 setTouched(true);
                 if (trimmed.length === 0) return;
-                onContinue();
+                onContinue(coverSeed || "seed");
               }}
             >
               Continue

@@ -1,9 +1,11 @@
+// admin-web/src/pages/channels/ChannelsPage.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./ChannelsPage.css";
 
 import CreateChannelModal from "./components/CreateChannelModal";
 import ChooseOrientationModal, { Orientation } from "./components/ChooseOrientationModal";
+import { coverFromSeed, getChannelCoverSeed, persistChannelCoverSeed } from "./channelCover";
 
 /** API types (match your Nest controller payloads) */
 type Channel = {
@@ -12,32 +14,6 @@ type Channel = {
   orientation: Orientation;
   createdAt: string;
 };
-
-function hashToInt(s: string) {
-  let h = 2166136261;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return Math.abs(h >>> 0);
-}
-
-/** Stable cover from channel id (no backend required). */
-function coverFromId(id: string) {
-  const palette: Array<[string, string]> = [
-    ["#22c55e", "#14b8a6"],
-    ["#0ea5e9", "#6366f1"],
-    ["#f97316", "#ef4444"],
-    ["#a855f7", "#3b82f6"],
-    ["#f59e0b", "#f97316"],
-    ["#10b981", "#0ea5e9"],
-    ["#ef4444", "#f43f5e"],
-    ["#6366f1", "#a855f7"],
-  ];
-  const idx = hashToInt(id) % palette.length;
-  const [a, b] = palette[idx];
-  return `linear-gradient(135deg, ${a} 0%, ${b} 100%)`;
-}
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
@@ -74,6 +50,9 @@ export default function ChannelsPage() {
   const [draftName, setDraftName] = useState("New Channel");
   const [draftOrientation, setDraftOrientation] = useState<Orientation>("landscape");
 
+  // cover seed captured from CreateChannelModal so we can persist it after creation
+  const [pendingCoverSeed, setPendingCoverSeed] = useState<string | null>(null);
+
   async function load() {
     setLoading(true);
     setError(null);
@@ -104,7 +83,16 @@ export default function ChannelsPage() {
         method: "POST",
         body: JSON.stringify({ name: draftName.trim(), orientation }),
       });
+
       const created = r.item;
+
+      // Persist the exact seed used in the create modal poster,
+      // so list + editor use the same cover color.
+      if (pendingCoverSeed) {
+        persistChannelCoverSeed(created.id, pendingCoverSeed);
+        setPendingCoverSeed(null);
+      }
+
       setItems((prev) => [created, ...prev]);
       setCreateOpen(false);
       setOrientationOpen(false);
@@ -113,6 +101,7 @@ export default function ChannelsPage() {
       setError(`Channels API is not reachable (POST /api/channels failed). ${e?.message ?? ""}`.trim());
       setCreateOpen(false);
       setOrientationOpen(false);
+      setPendingCoverSeed(null);
     }
   }
 
@@ -153,6 +142,7 @@ export default function ChannelsPage() {
           onClick={() => {
             setDraftName("New Channel");
             setDraftOrientation("landscape");
+            setPendingCoverSeed(null);
             setCreateOpen(true);
           }}
         >
@@ -185,30 +175,37 @@ export default function ChannelsPage() {
           </div>
         ) : (
           <div className="channels-list">
-            {filtered.map((c) => (
-              <div key={c.id} className="channel-row">
-                <div className="channel-cover" style={{ background: coverFromId(c.id) }} />
-                <div className="channel-meta">
-                  <div className="channel-name">{c.name}</div>
-                  <div className="channel-sub">{c.orientation === "landscape" ? "Landscape" : "Portrait"}</div>
-                </div>
+            {filtered.map((c) => {
+              const seed = getChannelCoverSeed(c.id);
+              const bg = coverFromSeed(seed);
 
-                <div className="channel-actions">
-                  <button className="btn btn-ghost" onClick={() => nav(`/channels/${c.id}`)}>
-                    Open
-                  </button>
+              return (
+                <div key={c.id} className="channel-row">
+                  {/* Use backgroundImage so CSS background-color !important cannot override it */}
+                  <div className="channel-cover" style={{ backgroundImage: bg }} />
 
-                  <div className="kebab">
-                    <button className="btn btn-ghost" onClick={() => duplicateChannel(c.id)}>
-                      Duplicate
+                  <div className="channel-meta">
+                    <div className="channel-name">{c.name}</div>
+                    <div className="channel-sub">{c.orientation === "landscape" ? "Landscape" : "Portrait"}</div>
+                  </div>
+
+                  <div className="channel-actions">
+                    <button className="btn btn-ghost" onClick={() => nav(`/channels/${c.id}`)}>
+                      Open
                     </button>
-                    <button className="btn btn-ghost danger" onClick={() => deleteChannel(c.id)}>
-                      Delete
-                    </button>
+
+                    <div className="kebab">
+                      <button className="btn btn-ghost" onClick={() => duplicateChannel(c.id)}>
+                        Duplicate
+                      </button>
+                      <button className="btn btn-ghost danger" onClick={() => deleteChannel(c.id)}>
+                        Delete
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -218,7 +215,8 @@ export default function ChannelsPage() {
         value={draftName}
         onChange={setDraftName}
         onClose={() => setCreateOpen(false)}
-        onContinue={() => {
+        onContinue={(coverSeed) => {
+          setPendingCoverSeed(coverSeed);
           setCreateOpen(false);
           setOrientationOpen(true);
         }}
@@ -232,7 +230,10 @@ export default function ChannelsPage() {
           setOrientationOpen(false);
           setCreateOpen(true);
         }}
-        onClose={() => setOrientationOpen(false)}
+        onClose={() => {
+          setOrientationOpen(false);
+          setPendingCoverSeed(null);
+        }}
         onCreate={(o) => createChannel(o)}
       />
     </div>

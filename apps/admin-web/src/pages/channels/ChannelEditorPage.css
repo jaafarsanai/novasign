@@ -117,6 +117,7 @@
   border: 1px solid #eef2f7;
   border-radius: 14px;
   min-height: 720px;
+  max-height: 720px;
   padding: 18px;
 }
 
@@ -143,25 +144,31 @@
 }
 
 .ce-empty {
-  height: 680px;
+  height: 450px;
   display: grid;
   place-items: center;
   text-align: center;
-  gap: 8px;
+  padding-top:36px;
 }
 .ce-empty-img {
   width: 260px;
   height: auto;
+  margin-bottom: 6px;
 }
 .ce-empty-title {
-  font-size: 20px;
+  font-size: 28px;
   font-weight: 650;
   color: #111827;
+  margin-top: 6px;
+  margin-bottom: 0;
 }
 .ce-empty-sub {
-  font-size: 13px;
+  font-size: 15px;
   color: #6b7280;
   max-width: 520px;
+ margin-top: 6px;
+  margin-bottom: 0;
+
 }
 
 /* Right panel */
@@ -170,6 +177,8 @@
   border: 1px solid #eef2f7;
   border-radius: 14px;
   overflow: hidden;
+  min-height:720px;
+  max-height:720px;
 }
 
 .ce-side-tabs {
@@ -725,5 +734,90 @@
   padding: 12px 14px;
   font-size: 13px;
   line-height: 1.35;
+}
+
+/* --- Additions for Save Status + Single Panel Header --- */
+
+.ce-side-header {
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #111827;
+  padding: 12px 0 10px;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 12px;
+}
+
+/* --- Save status pill (kept) --- */
+.ce-save-status {
+  font-size: 11px;
+  margin-right: 10px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  color: #6b7280;
+}
+.ce-save-status--saving {
+  color: #111827;
+}
+.ce-save-status--saved {
+  color: #059669;
+  border-color: rgba(5, 150, 105, 0.35);
+}
+.ce-save-status--noop {
+  color: #6b7280;
+}
+.ce-save-status--error {
+  color: #dc2626;
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+/* --- Reduce right panel typography & spacing --- */
+.ce-side-tabs {
+  gap: 8px;
+}
+.ce-side-tab {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  padding: 10px 10px;
+}
+
+.ce-side-section {
+  font-size: 12px;
+}
+
+.ce-dim-label,
+.ce-zone-title,
+.ce-field-label,
+.ce-settings-label {
+  font-size: 11px;
+}
+
+.ce-dim-value {
+  font-size: 18px; /* was visually big */
+  line-height: 1.15;
+}
+
+.ce-zone-name {
+  font-size: 12px;
+}
+
+.ce-tip {
+  font-size: 11px;
+}
+/* Compact typography (reduce overall feel) */
+.ce.ce-compact .ce-name { font-size: 20px; }
+.ce.ce-compact .ce-sub { font-size: 12px; }
+.ce.ce-compact .ce-empty-title { font-size: 22px; }
+.ce.ce-compact .ce-empty-sub { font-size: 13px; }
+
+/* Make sure modals are always above the page */
+.clm-backdrop,
+.dim-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
 }
 
