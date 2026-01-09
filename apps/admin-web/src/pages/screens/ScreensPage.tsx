@@ -54,11 +54,10 @@ function isOnline(lastSeenAt: string | null, nowMs: number, windowMs = 30_000) {
 }
 
 function mapApiToUi(s: ApiScreenRow): UiRow {
+  const fallback = s.isVirtual ? "Virtual Screen" : "Screen";
   return {
     id: s.id,
-    name:
-      (s.name ?? (s.isVirtual ? "Virtual Screen" : "Screen")).trim() ||
-      (s.isVirtual ? "Virtual Screen" : "Screen"),
+    name: (s.name ?? fallback).trim() || fallback,
     pairingCode: s.pairingCode,
     type: s.isVirtual ? "VIRTUAL" : "DEVICE",
     lastSeenAt: s.lastSeenAt,
@@ -68,11 +67,10 @@ function mapApiToUi(s: ApiScreenRow): UiRow {
 }
 
 export default function ScreensPage() {
-  const [rows, setRows] = useState<UiRow[]>([]);
+  // rows === null means "loading" (so we can avoid flashing the header)
+  const [rows, setRows] = useState<UiRow[] | null>(null);
   const [q, setQ] = useState("");
   const [error, setError] = useState<string | null>(null);
-
-  const [loading, setLoading] = useState(true);
 
   // UI-only tick so ONLINE/OFFLINE updates without polling backend
   const [nowTick, setNowTick] = useState(() => Date.now());
@@ -94,9 +92,11 @@ export default function ScreensPage() {
 
   async function load() {
     setError(null);
+
     const res = await fetch("/api/screens", { credentials: "include" });
     if (!res.ok) {
       setError(await res.text());
+      setRows([]); // stop loading so UI can render an error state
       return;
     }
 
@@ -112,7 +112,7 @@ export default function ScreensPage() {
       try {
         await load();
       } finally {
-        if (mounted) setLoading(false);
+        if (!mounted) return;
       }
     })();
 
@@ -125,20 +125,16 @@ export default function ScreensPage() {
 
     sockRef.current = s;
 
-    s.on("connect", () => {
-      // optional: could emit a subscribe event if you want per-tenant rooms later
-      // s.emit("screens:subscribe", {});
-    });
-
     s.on("screens:snapshot", (evt: ScreenSnapshotEvent) => {
       setRows((prev) => {
-        const next = prev.slice();
+        const base = prev ?? [];
+        const next = base.slice();
         const idx = next.findIndex((x) => x.id === evt.id);
+
+        const fallback = evt.isVirtual ? "Virtual Screen" : "Screen";
         const mapped: UiRow = {
           id: evt.id,
-          name:
-            (evt.name ?? (evt.isVirtual ? "Virtual Screen" : "Screen")).trim() ||
-            (evt.isVirtual ? "Virtual Screen" : "Screen"),
+          name: (evt.name ?? fallback).trim() || fallback,
           pairingCode: evt.pairingCode,
           type: evt.isVirtual ? "VIRTUAL" : "DEVICE",
           lastSeenAt: evt.lastSeenAt,
@@ -147,7 +143,6 @@ export default function ScreensPage() {
         };
 
         if (idx === -1) {
-          // Insert new row (rare; only when something is created/paired)
           next.unshift(mapped);
           return next;
         }
@@ -158,11 +153,7 @@ export default function ScreensPage() {
     });
 
     s.on("screens:deleted", (evt: ScreenDeletedEvent) => {
-      setRows((prev) => prev.filter((x) => x.id !== evt.id));
-    });
-
-    s.on("disconnect", () => {
-      // no-op
+      setRows((prev) => (prev ?? []).filter((x) => x.id !== evt.id));
     });
 
     return () => {
@@ -183,10 +174,15 @@ export default function ScreensPage() {
     setPage(1);
   }, [q, pageSize]);
 
+  const loading = rows === null;
+  const hasScreens = !loading && (rows?.length ?? 0) > 0;
+  const showEmpty = !loading && (rows?.length ?? 0) === 0;
+
   const filtered = useMemo(() => {
+    const base = rows ?? [];
     const qq = q.trim().toLowerCase();
-    if (!qq) return rows;
-    return rows.filter(
+    if (!qq) return base;
+    return base.filter(
       (r) =>
         r.name.toLowerCase().includes(qq) ||
         r.pairingCode.toLowerCase().includes(qq) ||
@@ -217,7 +213,6 @@ export default function ScreensPage() {
 
     const data = (await res.json()) as { code: string };
     window.open(`/virtual-screen/${encodeURIComponent(data.code)}`, "_blank", "noopener,noreferrer");
-    // Do NOT call load() here; realtime will update when/if it becomes paired/DB-backed.
   }
 
   async function pairScreen(code: string) {
@@ -239,7 +234,6 @@ export default function ScreensPage() {
       }
 
       setPairOpen(false);
-      // optional: load() for immediate refresh, but realtime event should arrive anyway
       await load();
     } finally {
       setPairSubmitting(false);
@@ -248,6 +242,7 @@ export default function ScreensPage() {
 
   async function deleteScreen(id: string) {
     setError(null);
+
     const res = await fetch(`/api/screens/${encodeURIComponent(id)}`, {
       method: "DELETE",
       credentials: "include",
@@ -259,8 +254,7 @@ export default function ScreensPage() {
     }
 
     setMenuOpenId(null);
-    // realtime will also remove, but this keeps UX instant
-    setRows((prev) => prev.filter((x) => x.id !== id));
+    setRows((prev) => (prev ?? []).filter((x) => x.id !== id));
   }
 
   function openAssign(r: UiRow) {
@@ -272,46 +266,46 @@ export default function ScreensPage() {
   function openPreview(r: UiRow) {
     window.open(`/virtual-screen/${encodeURIComponent(r.pairingCode)}`, "_blank", "noopener,noreferrer");
     setMenuOpenId(null);
-    // no load() needed; preview ping will trigger realtime snapshot
   }
 
-  const showEmpty = !loading && total === 0;
-
   return (
-    <div className="ns2-screens-page">
-      <div className="ns2-screens-header">
-        <div className="ns2-screens-title">
-          <h1>Screens</h1>
-          <p>Manage your screens, pairing codes, and assigned playlists.</p>
-        </div>
-
-        <div className="ns2-screens-actions">
-          <div className="ns2-searchwrap">
-            <span className="ns2-searchicon" aria-hidden />
-            <input
-              className="ns2-screens-search"
-              placeholder="Search Screens"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+    <div className={`ns2-screens-page ${showEmpty ? "ns2-screens-page--empty" : ""}`}>
+      {/* Header ONLY when there are screens */}
+      {hasScreens && (
+        <div className="ns2-screens-header">
+          <div className="ns2-screens-title">
+            <h1>Screens</h1>
+            <p>Manage your screens, pairing codes, and assigned playlists.</p>
           </div>
 
-          <button
-            type="button"
-            className="ns2-linkbtn"
-            onClick={() => {
-              setPairError(null);
-              setPairOpen(true);
-            }}
-          >
-            Pair screen
-          </button>
+          <div className="ns2-screens-actions">
+            <div className="ns2-searchwrap">
+              <span className="ns2-searchicon" aria-hidden />
+              <input
+                className="ns2-screens-search"
+                placeholder="Search Screens"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            </div>
 
-          <button type="button" className="ns2-primarybtn" onClick={launchVirtualScreen}>
-            Launch virtual screen
-          </button>
+            <button
+              type="button"
+              className="ns2-linkbtn"
+              onClick={() => {
+                setPairError(null);
+                setPairOpen(true);
+              }}
+            >
+              Pair screen
+            </button>
+
+            <button type="button" className="ns2-primarybtn" onClick={launchVirtualScreen}>
+              Launch virtual screen
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {error && <pre className="ns2-error ns2-error-inline">{error}</pre>}
 
@@ -322,44 +316,62 @@ export default function ScreensPage() {
           <div className="ns2-skeleton-row" />
         </div>
       ) : showEmpty ? (
-        <div className="ns2-empty-wrap">
-          <div className="ns2-empty-bg" />
-          <div className="ns2-empty-inner">
-            <div className="ns2-empty-head">You don’t have any screens yet</div>
+        <div className="ns2-empty-center">
+          <div className="screens-empty">
+            <div className="screens-empty-title">Okay, let's get a screen up and running</div>
 
-            <div className="ns2-empty-grid">
-              <div className="ns2-empty-card dark">
-                <div className="ns2-empty-card-inner">
-                  <div className="ns2-empty-card-title">Pair a physical screen</div>
-                  <div className="ns2-empty-card-sub">
-                    Open your device, display the pairing code, then use <b>Pair screen</b> here.
+            <div className="screens-empty-cards">
+              <div className="screens-empty-card screens-empty-card--dark">
+                <div className="screens-empty-card-body">
+                  <div className="screens-empty-card-h">I know what I'm doing</div>
+                  <div className="screens-empty-card-p">
+                    I have a screen displaying a pairing code
+                    <br />
+                    and I'm ready to connect
                   </div>
-                  <button type="button" className="ns2-cta-btn yellow" onClick={() => setPairOpen(true)}>
-                    Pair screen
-                  </button>
                 </div>
+
+                <button
+                  type="button"
+                  className="btn btn-primary screens-empty-card-cta"
+                  onClick={() => {
+                    setPairError(null);
+                    setPairOpen(true);
+                  }}
+                >
+                  Pair your screen now
+                </button>
               </div>
 
-              <div className="ns2-empty-card purple">
-                <div className="ns2-empty-card-inner">
-                  <div className="ns2-empty-purple-row">
-                    <div>
-                      <div className="ns2-empty-card-title">Try a virtual screen</div>
-                      <div className="ns2-empty-card-sub">
-                        Launch a virtual screen in a new tab and use it as a test device for playlists.
-                      </div>
-                      <button type="button" className="ns2-cta-btn white" onClick={launchVirtualScreen}>
-                        Launch virtual screen
-                      </button>
+              <div className="screens-empty-card screens-empty-card--purple">
+                <div className="screens-empty-card-top">
+                  <div className="screens-empty-card-body">
+                    <div className="screens-empty-card-h">I just want to experiment with it</div>
+                    <div className="screens-empty-card-p">
+                      No screen, no problem?
+                      <br />
+                      Launch a virtual screen to pair
+                      <br />
+                      and display content on.
                     </div>
-                    <div className="ns2-purple-illus" />
                   </div>
-                </div>
-              </div>
-            </div>
 
-            <div className="ns2-empty-help">
-              Tip: After pairing, use <b>Set content</b> to assign a playlist.
+                  <img
+                    className="screens-empty-card-illus"
+                    src="/assets/icons/screenlayout.svg"
+                    alt=""
+                    draggable={false}
+                  />
+                </div>
+
+                <button
+                  type="button"
+                  className="btn btn-ghost screens-empty-card-cta screens-empty-card-cta--pill"
+                  onClick={launchVirtualScreen}
+                >
+                  Launch a Virtual Screen
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -385,13 +397,16 @@ export default function ScreensPage() {
                     <tr key={r.id}>
                       <td className="ns2-td-strong">
                         <div className="ns2-rowtitle">
-                          
-                          <span className={ "ns2-thumb " + (r.type === "VIRTUAL" ? "ns2-thumb-virtual" : "ns2-thumb-device") }  aria-hidden/>
-
-			<span>{r.name}</span>
+                          <span
+                            className={"ns2-thumb " + (r.type === "VIRTUAL" ? "ns2-thumb-virtual" : "ns2-thumb-device")}
+                            aria-hidden
+                          />
+                          <span>{r.name}</span>
                         </div>
                       </td>
+
                       <td>{r.type}</td>
+
                       <td>
                         {online ? (
                           <span className="ns2-badge ns2-badge-live">Live</span>
@@ -399,6 +414,7 @@ export default function ScreensPage() {
                           <span className="ns2-badge ns2-badge-off">Offline</span>
                         )}
                       </td>
+
                       <td className="ns2-muted">{r.assignedPlaylistName ?? "—"}</td>
                       <td className="ns2-muted">{formatTime(r.lastSeenAt)}</td>
 
@@ -449,7 +465,7 @@ export default function ScreensPage() {
             pageSize={pageSize}
             total={total}
             onPageChange={setPage}
-            onPageSizeChange={(n) => setPageSize(n)}
+            onPageSizeChange={(n: number) => setPageSize(n)}
             pageSizeOptions={[10, 25, 50]}
           />
         </>
