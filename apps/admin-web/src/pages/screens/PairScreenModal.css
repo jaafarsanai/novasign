@@ -1,147 +1,187 @@
-.pair-modal-backdrop {
+.pairModalOverlay {
   position: fixed;
   inset: 0;
-  background: rgba(2, 6, 23, 0.55);
-  backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.35);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 4000;
-  animation: ns2FadeIn 0.18s ease-out;
+  z-index: 9999;
 }
 
-@keyframes ns2FadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
+.pairModal {
+  width: min(1080px, calc(100vw - 48px));
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
 }
 
-.pair-modal {
-  width: min(520px, calc(100vw - 28px));
-  background: #ffffff;
-  border-radius: 16px;
-  box-shadow: 0 28px 70px rgba(15, 23, 42, 0.25);
-  padding: 18px 18px 16px;
-  animation: ns2Pop 0.18s ease-out;
-}
-
-@keyframes ns2Pop {
-  from { transform: translateY(8px) scale(0.98); opacity: 0; }
-  to { transform: translateY(0) scale(1); opacity: 1; }
-}
-
-.pair-modal-header {
+.pairModalHeader {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
+  padding: 16px 18px;
+  border-bottom: 1px solid #eee;
 }
 
-.pair-modal-header h2 {
-  margin: 0;
-  font-size: 18px;
-  font-weight: 900;
-  color: #0f172a;
+.pairModalTitle {
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
 }
 
-.pair-modal-close {
-  width: 36px;
-  height: 36px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
-  cursor: pointer;
-  font-size: 18px;
+.pairModalClose {
+  width: 38px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+  font-size: 28px;
   line-height: 1;
+  cursor: pointer;
+  color: #111;
 }
 
-.pair-modal-close:hover {
-  background: #f3f4f6;
+.pairModalBody {
+  padding: 22px 22px 10px;
 }
 
-.pair-modal-description {
-  margin: 0 0 14px;
-  color: #64748b;
-  font-weight: 650;
+.pairTv {
+  position: relative;
+  margin: 0 auto;
+  width: min(860px, 100%);
+  aspect-ratio: 16 / 9;
+  border-radius: 6px;
+  background: radial-gradient(120% 120% at 25% 35%, #2a2f36, #14171b 55%, #0c0e10);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.25);
+  border: 2px solid #0b0c0e;
+  overflow: hidden;
+}
+
+.pairTvLogo {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.pairTvLogoMark {
+  width: 22px;
+  height: 14px;
+  border-radius: 4px;
+  background: #f6c400;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+.pairTvCenter {
+  height: 100%;
+  width: 100%;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+}
+
+.pairTvPrompt {
+  color: rgba(255, 255, 255, 0.92);
+  font-weight: 700;
+  font-size: 22px;
+  margin-bottom: 18px;
+}
+
+.pairTvHelp {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12px;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+/* Big code, ScreenCloud-like */
+.pairTvCodeInput{
+  width: min(720px, 92%);
+  background: transparent;
+  border: 0;
+  outline: none;
+
+  /* Bigger code like ScreenCloud */
+  font-size: clamp(64px, 7vw, 110px);
+  font-weight: 900;
+  letter-spacing: 10px;
+  text-transform: uppercase;
+  text-align: center;
+  color: #fff;
+
+  /* ✅ show blinking caret */
+  caret-color: rgba(255,255,255,.95);
+}
+
+
+/* Make sure no pseudo caret/decoration appears */
+.pairTvCodeInput::selection {
+  background: rgba(246, 196, 0, 0.25);
+}
+
+.pairTvUnderline {
+  margin: 18px auto 18px;
+  width: min(600px, 92%);
+  height: 2px;
+  background: #f6c400;
+  opacity: 0.95;
+}
+
+.pairTvCheckbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 15px;
+  margin-top: 2px;
+}
+
+.pairTvCheckbox input {
+  transform: scale(1.05);
+}
+
+.pairTvNote {
+  margin-top: 14px;
+  max-width: 680px;
+  color: rgba(255, 255, 255, 0.55);
   font-size: 13px;
-  line-height: 1.45;
+  line-height: 1.35;
 }
 
-.pair-modal-inputs {
+.pairTvError {
+  margin-top: 10px;
+  color: #ffb4b4;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.pairModalFooter {
   display: flex;
   justify-content: center;
-  gap: 10px;
-  margin: 12px 0 12px;
+  padding: 16px 22px 22px;
 }
 
-.pair-modal-input {
-  width: 48px;
-  height: 56px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  text-align: center;
-  font-size: 22px;
-  font-weight: 900;
-  text-transform: uppercase;
-  outline: none;
-  background: #fff;
-}
-
-.pair-modal-input:focus {
-  border-color: #cbd5e1;
-  box-shadow: 0 0 0 4px rgba(15, 23, 42, 0.08);
-}
-
-.pair-modal-error {
-  margin-top: 6px;
-  color: #b91c1c;
-  background: #fef2f2;
-  border: 1px solid #fecaca;
-  border-radius: 12px;
-  padding: 10px 12px;
+.pairContinueBtn {
+  min-width: 240px;
+  height: 44px;
+  border: 0;
+  border-radius: 8px;
+  background: #f6c400;
+  color: #111;
   font-weight: 800;
-  font-size: 12px;
-}
-
-.pair-modal-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  margin-top: 14px;
-}
-
-.pair-modal-secondary-btn,
-.pair-modal-primary-btn {
-  height: 36px;
-  padding: 0 14px;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
   cursor: pointer;
-  font-weight: 900;
 }
 
-.pair-modal-secondary-btn {
-  background: #fff;
-  color: #0f172a;
-}
-
-.pair-modal-secondary-btn:hover:enabled {
-  background: #f8fafc;
-}
-
-.pair-modal-primary-btn {
-  background: #0f172a;
-  color: #fff;
-  border-color: #0f172a;
-}
-
-.pair-modal-primary-btn:hover:enabled {
-  background: #111827;
-}
-
-.pair-modal-secondary-btn:disabled,
-.pair-modal-primary-btn:disabled {
-  opacity: 0.6;
+.pairContinueBtn:disabled {
+  opacity: 0.35;
   cursor: not-allowed;
 }
 

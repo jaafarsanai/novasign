@@ -1,123 +1,120 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./PairScreenModal.css";
 
-interface PairScreenModalProps {
+type Props = {
   open: boolean;
   onClose: () => void;
-  onSubmit: (code: string) => void;
+
+  // Accept previewMode optionally to avoid future TS pain:
+  // - ScreensPage can pass (code) => ...
+  // - Modal can call (code, previewMode)
+  onSubmit: (code: string, previewMode?: boolean) => Promise<void> | void;
+
+  // ✅ these fix your current build error
   isSubmitting?: boolean;
   error?: string | null;
+};
+
+function normalizeCode(v: string) {
+  return v.replace(/[^a-zA-Z0-9]/g, "").toUpperCase().slice(0, 6);
 }
 
-const CODE_LENGTH = 6;
-
-const PairScreenModal: React.FC<PairScreenModalProps> = ({
+export default function PairScreenModal({
   open,
   onClose,
   onSubmit,
   isSubmitting = false,
   error = null,
-}) => {
-  const [digits, setDigits] = useState<string[]>(
-    Array.from({ length: CODE_LENGTH }, () => "")
-  );
-
-  const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
+}: Props) {
+  const [code, setCode] = useState("");
+  const [previewMode, setPreviewMode] = useState(false);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    if (open) {
-      setDigits(Array.from({ length: CODE_LENGTH }, () => ""));
-      setTimeout(() => inputRefs.current[0]?.focus(), 50);
-    }
-  }, [open]);
-
-  const handleChange = (index: number, value: string) => {
-    const clean = value.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
-    const next = [...digits];
-
-    if (!clean) {
-      next[index] = "";
-      setDigits(next);
+    if (!open) {
+      setCode("");
+      setPreviewMode(false);
       return;
     }
 
-    next[index] = clean[0];
-    setDigits(next);
+    // Ensure caret is visible immediately when modal opens
+    requestAnimationFrame(() => inputRef.current?.focus());
+  }, [open]);
 
-    if (index < CODE_LENGTH - 1) {
-      inputRefs.current[index + 1]?.focus();
-    }
-  };
-
-  const handleKey = (index: number, event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Backspace" && !digits[index] && index > 0) {
-      inputRefs.current[index - 1]?.focus();
-    }
-    if (event.key === "Enter") submitCode();
-  };
-
-  const submitCode = () => {
-    const code = digits.join("");
-    if (code.length === CODE_LENGTH) onSubmit(code);
-  };
+  const cleanCode = useMemo(() => normalizeCode(code), [code]);
+  const canContinue = cleanCode.length === 6 && !isSubmitting;
 
   if (!open) return null;
 
   return (
-    <div className="pair-modal-backdrop" onMouseDown={onClose}>
-      <div className="pair-modal" onMouseDown={(e) => e.stopPropagation()}>
-        <div className="pair-modal-header">
-          <h2>Pair your screen</h2>
-          <button type="button" className="pair-modal-close" onClick={onClose}>
+    <div className="pairModalOverlay" role="dialog" aria-modal="true" aria-label="New Screen">
+      <div className="pairModal">
+        {/* Header */}
+        <div className="pairModalHeader">
+          <div className="pairModalTitle">New Screen</div>
+          <button className="pairModalClose" onClick={onClose} aria-label="Close">
             ×
           </button>
         </div>
 
-        <p className="pair-modal-description">
-          Enter the 6-character code showing on your device to pair it with Novasign.
-        </p>
+        {/* Body */}
+        <div className="pairModalBody">
+          <div className="pairTv">
+            {/* Top-left logo mark (keep) */}
+            <div className="pairTvLogo" aria-hidden>
+              <div className="pairTvLogoMark" />
+            </div>
 
-        <div className="pair-modal-inputs">
-          {digits.map((digit, index) => (
-            <input
-              key={index}
-              ref={(el) => {
-                inputRefs.current[index] = el;
-              }}
-              className="pair-modal-input"
-              type="text"
-              maxLength={1}
-              value={digit}
-              onChange={(e) => handleChange(index, e.target.value)}
-              onKeyDown={(e) => handleKey(index, e)}
-            />
-          ))}
+            <div className="pairTvCenter">
+              <div className="pairTvPrompt">
+                Enter the 6-character pairing code <span className="pairTvHelp">?</span>
+              </div>
+
+              {/* Big input, with caret blinking to show where to type */}
+              <input
+                ref={inputRef}
+                className="pairTvCodeInput"
+                value={code}
+                onChange={(e) => setCode(normalizeCode(e.target.value))}
+                inputMode="text"
+                autoComplete="one-time-code"
+                disabled={isSubmitting}
+                aria-label="Pairing code"
+              />
+
+              <div className="pairTvUnderline" />
+
+              <label className="pairTvCheckbox">
+                <input
+                  type="checkbox"
+                  checked={previewMode}
+                  onChange={(e) => setPreviewMode(e.target.checked)}
+                  disabled={isSubmitting}
+                />
+                <span>Start screen in Preview Mode</span>
+              </label>
+
+              <div className="pairTvNote">
+                To keep your paired screens after this date, please add your payment details.
+              </div>
+
+              {error ? <div className="pairTvError">{error}</div> : null}
+            </div>
+          </div>
         </div>
 
-        {error && <div className="pair-modal-error">{error}</div>}
-
-        <div className="pair-modal-actions">
+        {/* Footer: only Continue (no Replace device instead) */}
+        <div className="pairModalFooter">
           <button
-            type="button"
-            className="pair-modal-secondary-btn"
-            onClick={onClose}
-            disabled={isSubmitting}
+            className="pairContinueBtn"
+            disabled={!canContinue}
+            onClick={() => onSubmit(cleanCode, previewMode)}
           >
-            Cancel
-          </button>
-          <button
-            type="button"
-            className="pair-modal-primary-btn"
-            onClick={submitCode}
-            disabled={isSubmitting}
-          >
-            {isSubmitting ? "Pairing…" : "Pair screen"}
+            Continue
           </button>
         </div>
       </div>
     </div>
   );
-};
-
-export default PairScreenModal;
+}
 
