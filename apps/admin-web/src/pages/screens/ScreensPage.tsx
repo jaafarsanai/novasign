@@ -211,8 +211,8 @@ export default function ScreensPage() {
       return;
     }
 
-    const data = (await res.json()) as { code: string };
-    window.open(`/virtual-screen/${encodeURIComponent(data.code)}`, "_blank", "noopener,noreferrer");
+    const data = (await res.json()) as { id: string; pairingCode: string; code?: string };
+    window.open(`/virtual-screen/${encodeURIComponent(data.id)}`, "_blank", "noopener,noreferrer");
   }
 
   async function pairScreen(code: string) {
@@ -263,8 +263,24 @@ export default function ScreensPage() {
     setMenuOpenId(null);
   }
 
-  function openPreview(r: UiRow) {
-    window.open(`/virtual-screen/${encodeURIComponent(r.pairingCode)}`, "_blank", "noopener,noreferrer");
+  async function openPreview(r: UiRow) {
+    setError(null);
+
+    const res = await fetch("/api/screens/virtual-sessions/for-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ code: r.pairingCode }),
+    });
+
+    if (!res.ok) {
+      setError(await res.text());
+      setMenuOpenId(null);
+      return;
+    }
+
+    const data = (await res.json()) as { id: string; pairingCode: string };
+    window.open(`/virtual-screen/${encodeURIComponent(data.id)}`, "_blank", "noopener,noreferrer");
     setMenuOpenId(null);
   }
 
@@ -303,7 +319,7 @@ export default function ScreensPage() {
             <button type="button" className="ns2-primarybtn" onClick={launchVirtualScreen}>
               Launch virtual screen
             </button>
-          </div>
+            </div>
         </div>
       )}
 
@@ -430,7 +446,7 @@ export default function ScreensPage() {
 
                           {menuOpenId === r.id && (
                             <div className="ns2-menu">
-                              <button type="button" className="ns2-menu-item" onClick={() => openPreview(r)}>
+                              <button type="button" className="ns2-menu-item" onClick={() => void openPreview(r)}>
                                 Preview
                               </button>
 

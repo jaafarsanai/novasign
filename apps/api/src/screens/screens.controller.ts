@@ -24,9 +24,36 @@ export class ScreensController {
     }));
   }
 
+  /**
+   * Backward-compatible endpoint you already use.
+   * Now returns { id, pairingCode, code } so old callers can still read `.code`.
+   */
   @Post("virtual-session")
   async createVirtualSession() {
-    return this.screens.createVirtualSession();
+    const created = await this.screens.createVirtualSession();
+    return {
+      id: created.id,
+      pairingCode: created.pairingCode,
+      code: created.pairingCode,
+    };
+  }
+
+  /**
+   * New endpoints used by VirtualScreenPage.tsx
+   */
+  @Post("virtual-sessions")
+  async createVirtualSessionV2() {
+    return this.screens.createVirtualSession(); // { id, pairingCode }
+  }
+
+  @Post("virtual-sessions/for-code")
+  async createVirtualSessionForCode(@Body() body: { code: string }) {
+    return this.screens.createVirtualSessionForCode(body?.code); // { id, pairingCode }
+  }
+
+  @Get("virtual-sessions/:id")
+  async getVirtualSession(@Param("id") id: string) {
+    return this.screens.getVirtualSession(id); // { id, pairingCode }
   }
 
   @Post("pair")
@@ -41,12 +68,9 @@ export class ScreensController {
 
   @Post(":id/assign-playlist")
   async assignPlaylist(@Param("id") id: string, @Body() body: { playlistId: string | null }) {
-    const updated = await this.screens.assignPlaylist(id, body?.playlistId ?? null);
+    await this.screens.assignPlaylist(id, body?.playlistId ?? null);
 
-    // If you can retrieve code here, do it. Otherwise just broadcast changed.
-    // (Best: return code from assignPlaylist service or query it here.)
     this.wsState.broadcastScreensChanged("assign-playlist");
-
     return { ok: true };
   }
 

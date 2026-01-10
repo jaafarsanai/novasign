@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
+import { randomBytes } from "crypto";
 
 function makeCode6() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -53,8 +54,23 @@ export class ScreensService {
   // It lets pairByCodeUpsert know whether a pairing code is currently coming from a Virtual Screen tab.
   private readonly activeVirtualCodes = new Set<string>();
 
+  // Opaque virtual sessions: id -> { pairingCode, createdAt }
+  private readonly virtualSessions = new Map<string, { pairingCode: string; createdAt: number }>();
+
   private normCode(code: any) {
     return String(code || "").trim().toUpperCase();
+  }
+
+  private makeSessionId(): string {
+    // 16-hex chars (64-bit). Increase length if you want.
+    return randomBytes(8).toString("hex");
+  }
+
+  private cleanupVirtualSessions(ttlMs = 1000 * 60 * 60) {
+    const now = Date.now();
+    for (const [id, s] of this.virtualSessions.entries()) {
+      if (now - s.createdAt > ttlMs) this.virtualSessions.delete(id);
+    }
   }
 
   markVirtualConnected(rawCode: string) {
@@ -110,17 +126,65 @@ export class ScreensService {
     });
   }
 
-  // virtual session returns ONLY a code (no DB insert)
+  /**
+   * Create a new opaque session + pairing code (no DB insert).
+   * Returns { id, pairingCode }.
+   */
   async createVirtualSession() {
-    let code = makeCode6();
+    this.cleanupVirtualSessions();
+
+    let pairingCode = makeCode6();
 
     for (let i = 0; i < 20; i++) {
-      const exists = await this.prisma.screen.findFirst({ where: { pairingCode: code } });
+      const exists = await this.prisma.screen.findFirst({ where: { pairingCode } });
       if (!exists) break;
-      code = makeCode6();
+      pairingCode = makeCode6();
     }
 
-    return { code };
+    let id = this.makeSessionId();
+    for (let i = 0; i < 10; i++) {
+      if (!this.virtualSessions.has(id)) break;
+      id = this.makeSessionId();
+    }
+
+    this.virtualSessions.set(id, { pairingCode, createdAt: Date.now() });
+    return { id, pairingCode };
+  }
+
+  /**
+   * Create an opaque session for an existing pairing code (for preview/open without exposing code in URL).
+   * Returns { id, pairingCode }.
+   */
+  async createVirtualSessionForCode(rawCode: string) {
+    this.cleanupVirtualSessions();
+
+    const pairingCode = this.normCode(rawCode);
+    if (!pairingCode || pairingCode.length !== 6) {
+      throw new NotFoundException("Invalid pairing code");
+    }
+
+    let id = this.makeSessionId();
+    for (let i = 0; i < 10; i++) {
+      if (!this.virtualSessions.has(id)) break;
+      id = this.makeSessionId();
+    }
+
+    this.virtualSessions.set(id, { pairingCode, createdAt: Date.now() });
+    return { id, pairingCode };
+  }
+
+  /**
+   * Fetch session by opaque id.
+   * Returns { id, pairingCode }.
+   */
+  async getVirtualSession(id: string) {
+    this.cleanupVirtualSessions();
+
+    const key = String(id || "").trim();
+    const s = this.virtualSessions.get(key);
+    if (!s) throw new NotFoundException("Virtual session not found");
+
+    return { id: key, pairingCode: s.pairingCode };
   }
 
   /**
@@ -342,24 +406,24 @@ export class ScreensService {
       select: { id: true, pairingCode: true },
     });
   }
+
   async getAdminScreenSnapshotById(screenId: string) {
-  const s = await this.prisma.screen.findUnique({
-    where: { id: screenId },
-    include: { assignedPlaylist: true },
-  });
-  if (!s) return null;
+    const s = await this.prisma.screen.findUnique({
+      where: { id: screenId },
+      include: { assignedPlaylist: true },
+    });
+    if (!s) return null;
 
-  return {
-    id: s.id,
-    name: s.name,
-    pairingCode: s.pairingCode,
-    pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
-    lastSeenAt: s.lastSeenAt ? s.lastSeenAt.toISOString() : null,
-    isVirtual: !!s.isVirtual,
-    assignedPlaylistId: s.assignedPlaylistId ?? null,
-    assignedPlaylistName: s.assignedPlaylist?.name ?? null,
-  };
-}
-
+    return {
+      id: s.id,
+      name: s.name,
+      pairingCode: s.pairingCode,
+      pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
+      lastSeenAt: s.lastSeenAt ? s.lastSeenAt.toISOString() : null,
+      isVirtual: !!s.isVirtual,
+      assignedPlaylistId: s.assignedPlaylistId ?? null,
+      assignedPlaylistName: s.assignedPlaylist?.name ?? null,
+    };
+  }
 }
 

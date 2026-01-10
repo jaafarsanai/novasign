@@ -57,7 +57,7 @@ body,
   gap: 18px;
   padding: 26px;
 
-   background: radial-gradient(
+  background: radial-gradient(
     120% 140% at 25% 20%,
     rgba(35, 90, 160, 0.55),
     rgba(8, 20, 38, 0.92) 55%,
@@ -132,10 +132,11 @@ body,
   background: rgba(255, 255, 255, 0.06);
 }
 
-.vs-code {
+/* TV code (70px) */
+.vs-tvCode {
   margin-top: auto;
 
-  font-size: 86px;
+  font-size: 90px;
   font-weight: 900;
   letter-spacing: 0.18em;
   color: #fff;
@@ -295,5 +296,61 @@ body,
   width: 96px;
   height: 96px;
   background: rgba(15, 23, 42, 0.06);
+}
+
+/* Clickable code button (shared behavior)
+   IMPORTANT: do NOT use `font: inherit;` here because it overrides `.vs-tvCode` font-size */
+.vs-codeBtn {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+
+  -moz-appearance: none;
+  appearance: none;
+  -webkit-appearance: none;
+
+  /* safe, does not reset font-size/weight */
+  font-family: inherit;
+}
+
+.vs-codeBtn:disabled {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Optional: subtle hover */
+.vs-codeBtn:not(:disabled):hover {
+  filter: brightness(1.05);
+}
+/* TV code must be white even though it's a button */
+.vs-tv .vs-codeBtn {
+  color: #fff;
+}
+
+/* Strip code must remain dark */
+.vs-strip .vs-codeBtn {
+  color: #0f172a;
+}
+
+/* Toast */
+.vs-copiedToast {
+  position: fixed;
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  background: rgba(20, 20, 20, 0.92);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 600;
+  z-index: 99999;
+}
+
+/* Error (if session load fails) */
+.vs-error {
+  margin-top: 14px;
+  color: #ffb4b4;
+  font-weight: 600;
 }
 
