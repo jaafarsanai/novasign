@@ -97,6 +97,13 @@ model Media {
   @@index([type])
   @@index([createdAt])
 }
+model VirtualScreenSession {
+  id         String   @id @default(uuid())
+  pairingCode String  @unique
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+}
 
 enum ScreenOrientation {
   LANDSCAPE

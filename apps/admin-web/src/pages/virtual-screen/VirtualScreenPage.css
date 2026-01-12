@@ -1,4 +1,4 @@
-/* Ensure the app truly fills the viewport */
+/* apps/admin-web/src/pages/virtual-screen/VirtualScreenPage.css */
 html,
 body,
 #root {
@@ -6,7 +6,6 @@ body,
   margin: 0;
 }
 
-/* Fullscreen stage, no scrollbars, black behind (in case of overscan/crop) */
 .vs-root {
   position: fixed;
   inset: 0;
@@ -16,11 +15,6 @@ body,
   touch-action: none;
 }
 
-/*
-  1920x1080 design canvas, scaled with COVER logic from TS:
-  - no black bars
-  - background + overlays move together
-*/
 .vs-canvas {
   position: absolute;
   left: 50%;
@@ -32,21 +26,18 @@ body,
   transform-origin: center;
 }
 
-/* Background image exactly matches canvas size */
 .vs-bg {
   position: absolute;
   inset: 0;
   background-image: url(/assets/icons/default.jpg);
   background-repeat: no-repeat;
   background-position: center;
-  background-size: cover; /* safe even if image replaced later */
+  background-size: cover;
 }
 
-/* === TV overlay (pixel-perfect coordinates on 1920x1080) === */
+/* TV overlay */
 .vs-tv {
   position: absolute;
-
-  /* Your working alignment (1920x1080 coordinates) */
   left: 492px;
   top: 157px;
   width: 947px;
@@ -68,6 +59,59 @@ body,
   overflow: hidden;
 }
 
+/* MEDIA MODE:
+   Make the player fill the full TV box (no padding, no grid columns)
+*/
+.vs-tv.vs-tv--media {
+  display: block;
+  padding: 0;
+  gap: 0;
+  background: #000;
+}
+
+/* Player fills full TV (edge-to-edge) */
+.vs-player {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #000;
+}
+
+/* Media should fill TV area completely */
+.vs-media {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  border-radius: 0 !important;
+}
+
+.vs-videoWrap {
+  position: absolute;
+  inset: 0;
+}
+
+/* Audio overlay button */
+.vs-soundCta {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.vs-soundCta:hover {
+  background: rgba(0, 0, 0, 0.68);
+}
+
 /* Left side */
 .vs-tv-left {
   display: flex;
@@ -83,7 +127,6 @@ body,
   margin-bottom: 14px;
 }
 
-/* Step list with circled numbers */
 .vs-steps {
   margin: 0;
   padding: 0;
@@ -92,6 +135,7 @@ body,
   font-size: 14px;
   line-height: 1.5;
   max-width: 520px;
+  counter-reset: step;
 }
 
 .vs-steps li {
@@ -101,49 +145,44 @@ body,
 }
 
 .vs-steps li::before {
-  content: counter(step);
-}
-
-.vs-steps {
-  counter-reset: step;
-}
-
-.vs-steps li::before {
   counter-increment: step;
   content: counter(step);
-
   position: absolute;
   left: 0;
   top: 0.1rem;
-
   width: 20px;
   height: 20px;
   border-radius: 999px;
-
   display: inline-flex;
   align-items: center;
   justify-content: center;
-
   font-size: 12px;
   font-weight: 700;
-
   color: rgba(255, 255, 255, 0.9);
   border: 1px solid rgba(255, 255, 255, 0.35);
   background: rgba(255, 255, 255, 0.06);
 }
 
-/* TV code (70px) */
-.vs-tvCode {
+.vs-code {
   margin-top: auto;
-
-  font-size: 90px;
+  font-size: 86px;
   font-weight: 900;
   letter-spacing: 0.18em;
   color: #fff;
-
   white-space: nowrap;
   overflow: hidden;
   text-overflow: clip;
+}
+
+.vs-debug {
+  margin-top: 10px;
+  font-size: 12px;
+  opacity: 0.85;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.vs-debug-err {
+  color: #ffb4b4;
 }
 
 /* Right side QR panel */
@@ -157,16 +196,13 @@ body,
   width: 100%;
   height: 100%;
   border-radius: 18px;
-
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.12);
-
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 14px;
-
   padding: 18px;
 }
 
@@ -199,7 +235,7 @@ body,
   );
 }
 
-/* === Bottom strip (positioned on design canvas) === */
+/* Bottom strip */
 .vs-strip {
   position: absolute;
   left: 170px;
@@ -296,61 +332,5 @@ body,
   width: 96px;
   height: 96px;
   background: rgba(15, 23, 42, 0.06);
-}
-
-/* Clickable code button (shared behavior)
-   IMPORTANT: do NOT use `font: inherit;` here because it overrides `.vs-tvCode` font-size */
-.vs-codeBtn {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-
-  -moz-appearance: none;
-  appearance: none;
-  -webkit-appearance: none;
-
-  /* safe, does not reset font-size/weight */
-  font-family: inherit;
-}
-
-.vs-codeBtn:disabled {
-  cursor: default;
-  opacity: 0.7;
-}
-
-/* Optional: subtle hover */
-.vs-codeBtn:not(:disabled):hover {
-  filter: brightness(1.05);
-}
-/* TV code must be white even though it's a button */
-.vs-tv .vs-codeBtn {
-  color: #fff;
-}
-
-/* Strip code must remain dark */
-.vs-strip .vs-codeBtn {
-  color: #0f172a;
-}
-
-/* Toast */
-.vs-copiedToast {
-  position: fixed;
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  background: rgba(20, 20, 20, 0.92);
-  color: #fff;
-  padding: 10px 14px;
-  border-radius: 10px;
-  font-weight: 600;
-  z-index: 99999;
-}
-
-/* Error (if session load fails) */
-.vs-error {
-  margin-top: 14px;
-  color: #ffb4b4;
-  font-weight: 600;
 }
 

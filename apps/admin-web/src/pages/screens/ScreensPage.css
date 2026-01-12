@@ -1,10 +1,15 @@
+/* apps/admin-web/src/pages/screens/ScreensPage.css */
 /* ------------------------------------------------------------
    ScreenCloud-ish Screens page — matches ns2-* markup in TSX
-   No workflow changes; styling only.
 ------------------------------------------------------------ */
 
 .ns2-screens-page {
   padding: 24px;
+
+  /* Make pagination pin to bottom reliably */
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 80px);
 }
 
 .ns2-screens-header {
@@ -48,26 +53,34 @@
 .ns2-searchicon {
   width: 16px;
   height: 16px;
-  opacity: 0.55;
-  display: inline-block;
-  border: 2px solid rgba(0,0,0,0.55);
-  border-top: 0;
-  border-left: 0;
-  transform: rotate(45deg);
-  border-radius: 2px;
   position: relative;
+  opacity: 0.6;
+  flex: 0 0 16px;
 }
 
 .ns2-searchicon::before {
   content: "";
   position: absolute;
-  width: 10px;
-  height: 10px;
-  border: 2px solid rgba(0,0,0,0.55);
+  left: 0;
+  top: 0;
+  width: 11px;
+  height: 11px;
+  border: 2px solid rgba(0, 0, 0, 0.55);
   border-radius: 999px;
-  left: -10px;
-  top: -10px;
-  transform: rotate(-45deg);
+  background: transparent;
+}
+
+.ns2-searchicon::after {
+  content: "";
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 7px;
+  height: 2px;
+  background: rgba(0, 0, 0, 0.55);
+  transform: rotate(45deg);
+  transform-origin: left center;
+  border-radius: 2px;
 }
 
 .ns2-screens-search {
@@ -94,13 +107,28 @@
 }
 
 .ns2-primarybtn {
-  border-color: rgba(0,0,0,0.15);
+  border-color: rgba(0, 0, 0, 0.15);
   background: #111827;
   color: #fff;
 }
 
 .ns2-primarybtn:hover {
   background: #0b1220;
+}
+
+.ns2-dangerbtn {
+  border: 1px solid rgba(185, 28, 28, 0.45);
+  background: rgba(185, 28, 28, 1);
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ns2-dangerbtn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
 
 /* Error */
@@ -123,53 +151,40 @@
 .ns2-skeleton-row {
   height: 70px;
   border-radius: 14px;
-  border: 1px solid rgba(0,0,0,0.08);
-  background: linear-gradient(90deg, rgba(0,0,0,0.03), rgba(0,0,0,0.06), rgba(0,0,0,0.03));
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: linear-gradient(90deg, rgba(0, 0, 0, 0.03), rgba(0, 0, 0, 0.06), rgba(0, 0, 0, 0.03));
   background-size: 200% 100%;
   animation: ns2-shimmer 1.2s infinite;
 }
 
 @keyframes ns2-shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-/* Empty state (keep your existing layout, just small refinements) */
-.ns2-empty-wrap {
-  margin-top: 40px;
-}
-
-.ns2-empty-inner {
-  max-width: 980px;
-}
-
-.ns2-empty-head {
-  font-size: 18px;
-  font-weight: 800;
-  margin-bottom: 10px;
-}
-
-.ns2-empty-help {
-  margin-top: 16px;
-  opacity: 0.75;
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
 }
 
 /* Table container */
 .ns2-table-wrap {
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid rgba(0, 0, 0, 0.10);
   border-radius: 14px;
   background: #fff;
   overflow: visible;
   position: relative;
-  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
-  z-index:0;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
+
+  /* allow it to grow and push pagination down */
+  flex: 1 1 auto;
+  z-index: 1;
 }
 
 .ns2-table {
   width: 100%;
   border-collapse: collapse;
   border-radius: 14px;
-  overflow: visible; /* keeps header corners clean */
+  overflow: visible;
 }
 
 .ns2-table thead th {
@@ -179,26 +194,23 @@
   text-transform: uppercase;
   font-weight: 800;
   padding: 14px 14px;
-  color: rgba(0,0,0,0.6);
-  background: rgba(0,0,0,0.02);
-  border-bottom: 1px solid rgba(0,0,0,0.08);
-  overflow: visible;
+  color: rgba(0, 0, 0, 0.6);
+  background: rgba(0, 0, 0, 0.02);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .ns2-th-right {
   text-align: right !important;
-   overflow: visible;
 }
 
 .ns2-table tbody td {
   padding: 14px;
-  border-bottom: 1px solid rgba(0,0,0,0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   vertical-align: middle;
-   overflow: visible;
 }
 
 .ns2-table tbody tr:hover {
-  background: rgba(0,0,0,0.015);
+  background: rgba(0, 0, 0, 0.015);
 }
 
 .ns2-td-strong {
@@ -217,12 +229,6 @@
   min-width: 0;
 }
 
-.ns2-rowtitle span:last-child {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .ns2-thumb {
   width: 56px;
   height: 56px;
@@ -232,14 +238,14 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 56px;
-  border: 1px solid rgba(0,0,0,0.08);
+  border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .ns2-thumb::before {
   content: "";
   width: 36px;
   height: 36px;
-  background: #19191b; /* mask color */
+  background: #19191b;
 }
 
 .ns2-thumb-virtual::before {
@@ -252,21 +258,44 @@
   mask: url("/assets/icons/screen.svg") center center / contain no-repeat;
 }
 
-.ns2-thumb-playlist::before {
-  -webkit-mask: url("/assets/icons/playlist.svg") center center / contain no-repeat;
-  mask: url("/assets/icons/playlist.svg") center center / contain no-repeat;
-}
-
-
-/* If mask unsupported or SVG missing, provide a visible fallback */
 @supports not ((mask: url("x") center/contain no-repeat) or (-webkit-mask: url("x") center/contain no-repeat)) {
   .ns2-thumb::before {
     width: 18px;
     height: 12px;
-    border: 2px solid rgba(0,0,0,0.65);
+    border: 2px solid rgba(0, 0, 0, 0.65);
     border-radius: 3px;
     background: transparent;
   }
+}
+
+/* Inline rename */
+.ns2-namebtn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+  font: inherit;
+  font-weight: 700;
+  cursor: text;
+  text-align: left;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ns2-inline-input {
+  width: min(420px, 44vw);
+  font: inherit;
+  font-weight: 700;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  outline: none;
+}
+
+.ns2-inline-input:focus {
+  border-color: rgba(17, 24, 39, 0.35);
+  box-shadow: 0 0 0 3px rgba(17, 24, 39, 0.10);
 }
 
 /* Badges */
@@ -275,7 +304,7 @@
   font-size: 12px;
   padding: 6px 10px;
   border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid rgba(0, 0, 0, 0.10);
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -287,8 +316,8 @@
 }
 
 .ns2-badge-off {
-  background: rgba(0,0,0,0.04);
-  border-color: rgba(0,0,0,0.12);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
   opacity: 0.8;
 }
 
@@ -306,7 +335,7 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   background: #fff;
   cursor: pointer;
   font-size: 18px;
@@ -314,7 +343,7 @@
 }
 
 .ns2-menu-btn:hover {
-  background: rgba(0,0,0,0.03);
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .ns2-menu {
@@ -322,12 +351,15 @@
   right: 0;
   top: 44px;
   width: 180px;
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 12px;
-  background: #fff;
-  box-shadow: 0 16px 40px rgba(0,0,0,0.12);
+
+  background: rgba(255, 255, 255, 1);
+
+  box-shadow: 0 22px 55px rgba(0, 0, 0, 0.18);
   padding: 6px;
-  z-index: 9999;
+
+  z-index: 20000;
 }
 
 .ns2-menu-item {
@@ -343,7 +375,7 @@
 }
 
 .ns2-menu-item:hover {
-  background: rgba(0,0,0,0.04);
+  background: rgba(0, 0, 0, 0.04);
 }
 
 .ns2-menu-danger {
@@ -353,130 +385,196 @@
 .ns2-menu-danger:hover {
   background: rgba(185, 28, 28, 0.08);
 }
-.screens-empty {
-  margin-top: 24px;
+
+/* Delete modal body */
+.ns2-del-body {
+  padding: 16px 16px 18px;
 }
 
-.screens-empty-title {
-  font-size: 20px;
-  font-weight: 700;
-  text-align: center;
-  margin: 24px 0 18px;
+.ns2-del-title {
+  font-weight: 900;
+  font-size: 16px;
+  margin-bottom: 6px;
 }
 
-.screens-empty-cards {
+.ns2-del-sub {
+  opacity: 0.75;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.ns2-del-actions {
   display: flex;
-  justify-content: center;
-  gap: 40px;
-  flex-wrap: wrap;
-  padding: 8px 0 24px;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 
-.screens-empty-card {
-  width: 500px;
-  min-height: 285px;
-  border-radius: 16px;
-  padding: 40px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.12);
-}
-
-.screens-empty-card-body {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.screens-empty-card-h {
-  font-size: 20px;
-  font-weight: 800;
-  line-height: 1.2;
-}
-
-.screens-empty-card-p {
-  font-size: 14px;
-  line-height: 1.5;
-  opacity: 0.9;
-}
-
-.screens-empty-card--dark {
-  color: #fff;
-  background: radial-gradient(120% 140% at 50% 0%, rgba(255, 255, 255, 0.08) 0%, rgba(0, 0, 0, 0) 55%),
-    radial-gradient(140% 140% at 50% 100%, rgba(255, 255, 255, 0.06) 0%, rgba(0, 0, 0, 0) 60%),
-    linear-gradient(180deg, #2b2b2b 0%, #0c0c0c 100%);
-  border: 4px solid rgba(0, 0, 0, 0.25);
-}
-
-.screens-empty-card--purple {
-  color: #fff;
-  background: linear-gradient(135deg, rgba(131, 100, 255, 1) 0%, rgba(116, 81, 255, 1) 100%);
-}
-
-.screens-empty-card-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.screens-empty-card-illus {
-  width: 230px;
-  height: auto;
-  user-select: none;
-  opacity: 0.95;
-}
-
-.screens-empty-card-cta {
-  align-self: center;
-  min-width: 220px;
-}
-
-.screens-empty-card-cta--pill {
-  border-radius: 999px;
-  padding-left: 18px;
-  padding-right: 18px;
-  background: rgba(255, 255, 255, 0.16);
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  color: #fff;
-}
-
-.screens-empty-card-cta--pill:hover {
-  background: rgba(255, 255, 255, 0.22);
-}
-
-@media (max-width: 1100px) {
-  .screens-empty-card {
-    width: min(500px, 92vw);
-  }
-
-  .screens-empty-card-top {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-
-  .screens-empty-card-illus {
-    width: 260px;
-    align-self: center;
-  }
-}
-/* When empty: center the whole empty-state block vertically + horizontally */
+/* Empty state centering */
 .ns2-screens-page--empty {
-  /* keep padding if you want; centering uses the inner wrapper */
 }
 
-/* The flex centering wrapper */
-.ns2-empty-center {
-  min-height: calc(100vh - 120px); /* adjust if your top bar/banner is taller */
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
 .ns2-empty-center {
   min-height: calc(100vh - 120px);
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* ------------------------------------------------------------
+   EMPTY STATE (missing before): matches ScreensPage.tsx markup
+   .screens-empty*, .btn*, etc.
+------------------------------------------------------------ */
+
+.screens-empty {
+  width: min(980px, 94vw);
+}
+
+.screens-empty-title {
+  font-size: 22px;
+  font-weight: 800;
+  margin: 0 0 18px;
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.screens-empty-cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.screens-empty-card {
+  border-radius: 16px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 260px;
+  border: 1px solid rgba(0, 0, 0, 0.10);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.08);
+}
+
+.screens-empty-card-body {
+  padding: 18px 18px 0;
+}
+
+.screens-empty-card-h {
+  font-size: 16px;
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
+.screens-empty-card-p {
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.85;
+}
+
+.screens-empty-card-top {
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 0;
+}
+
+.screens-empty-card-illus {
+  width: 240px;
+  max-width: 42%;
+  height: auto;
+  align-self: flex-end;
+  padding: 14px 14px 0 0;
+  object-fit: contain;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Variants */
+.screens-empty-card--dark {
+  background: linear-gradient(135deg, rgba(17, 24, 39, 1), rgba(2, 6, 23, 1));
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.screens-empty-card--dark .screens-empty-card-p {
+  opacity: 0.85;
+}
+
+.screens-empty-card--purple {
+  background: linear-gradient(135deg, rgba(76, 29, 149, 1), rgba(30, 64, 175, 1));
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.screens-empty-card--purple .screens-empty-card-p {
+  opacity: 0.88;
+}
+
+/* CTA area */
+.screens-empty-card-cta {
+  margin: auto 18px 18px;
+  align-self: flex-start;
+}
+
+/* “pill” CTA on second card */
+.screens-empty-card-cta--pill {
+  border-radius: 999px !important;
+  padding-left: 16px !important;
+  padding-right: 16px !important;
+}
+
+/* If your app already has .btn styles, these will be harmless.
+   If not, they ensure the empty state looks correct. */
+.btn {
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  background: #fff;
+  color: #111827;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.btn-primary {
+  background: #f59e0b;
+  border-color: rgba(245, 158, 11, 0.65);
+  color: #111;
+}
+
+.btn-primary:hover {
+  background: #f4a51c;
+}
+
+.btn-ghost {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(255, 255, 255, 0.55);
+  color: rgba(15, 23, 42, 0.92);
+}
+
+.btn-ghost:hover {
+  background: #fff;
+}
+
+/* Responsive */
+@media (max-width: 920px) {
+  .ns2-searchwrap {
+    min-width: 260px;
+  }
+
+  .screens-empty-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .screens-empty-card {
+    min-height: 240px;
+  }
+
+  .screens-empty-card-illus {
+    max-width: 46%;
+  }
 }
 

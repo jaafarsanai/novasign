@@ -1,5 +1,11 @@
 import { Logger } from "@nestjs/common";
-import { ConnectedSocket, MessageBody, SubscribeMessage, WebSocketGateway, WebSocketServer } from "@nestjs/websockets";
+import {
+  ConnectedSocket,
+  MessageBody,
+  SubscribeMessage,
+  WebSocketGateway,
+  WebSocketServer,
+} from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
 import { WsStateService } from "./ws-state.service";
 import { ScreensService } from "../screens/screens.service";
@@ -19,38 +25,53 @@ export class VirtualScreenGateway {
   ) {}
 
   afterInit(server: any) {
-    // normalize: ensure WsStateService receives root server
     this.wsState.bindServer(server?.server ?? server);
     this.logger.log("VirtualScreenGateway initialized");
   }
 
   handleConnection(client: Socket) {
     const code = String(client.handshake?.query?.code ?? "").trim().toUpperCase();
-    if (code) client.join(`code:${code}`);
+    if (code) {
+      client.join(`code:${code}`);
+      this.screens.markVirtualConnected(code);
+    }
+  }
+
+  handleDisconnect(client: Socket) {
+    const code = String(client.handshake?.query?.code ?? "").trim().toUpperCase();
+    if (code) {
+      this.screens.markVirtualDisconnected(code);
+    }
   }
 
   @SubscribeMessage("vs:ping")
-async onPing(
-  @ConnectedSocket() client: Socket,
-  @MessageBody() body: { code?: string }
-) {
-  const code = String(body?.code ?? "").trim().toUpperCase();
-  if (!code) return;
+  async onPing(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { code?: string }
+  ) {
+    const code = String(body?.code ?? "").trim().toUpperCase();
+    if (!code) return;
 
-  client.join(`code:${code}`);
+    client.join(`code:${code}`);
+    this.screens.markVirtualConnected(code);
 
-  // Update lastSeenAt if screen exists
-  const s = await this.screens.getByPairingCodeOrNull(code);
-  if (s) {
-    await this.screens.touchLastSeenById(s.id);
+    const s = await this.screens.getByPairingCodeOrNull(code);
+    if (s) {
+      await this.screens.touchLastSeenById(s.id);
+      await this.wsState.pushAdminScreenSnapshot(s.id);
+    }
 
-    // push realtime snapshot to admin (/screens namespace)
-    await this.wsState.pushAdminScreenSnapshot(s.id);
+    // Keep existing behavior
+    await this.wsState.pushVirtualScreenBundleToClient(client, code);
+
+    // Add a direct, deterministic fallback so the page can always play content
+    // even if WS-state event naming changes.
+    const state = await this.screens.getVirtualScreenStatePayload(code);
+    const playlist = await this.screens.getVirtualScreenPlaylistPayload(code);
+
+    client.emit("vs:state", state);
+    client.emit("vs:playlist", playlist);
+    client.emit("vs:bundle", { state, playlist });
   }
-
-  // push deterministic bundle to this client (virtual screen)
-  await this.wsState.pushVirtualScreenBundleToClient(client, code);
-}
-
 }
 

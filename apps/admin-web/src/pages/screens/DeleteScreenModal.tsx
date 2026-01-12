@@ -1,50 +1,68 @@
 import React from "react";
-import "./PairModal.css"; // keep styling consistent
-import type { Screen } from "./types";
+import { Modal } from "../../ui/Modal";
 
-export interface DeleteScreenModalProps {
-  open: boolean;                 // <-- ADD THIS
-  screen: Screen | null;
-  onClose: () => void;
-  onConfirm: () => Promise<void>;
-  isSubmitting: boolean;
-  error: string | null;
-}
-
-export const DeleteScreenModal: React.FC<DeleteScreenModalProps> = ({
+export default function DeleteScreenModal({
   open,
-  screen,
+  screenName,
+  isSubmitting,
+  error,
   onClose,
   onConfirm,
-  isSubmitting,
-  error
-}) => {
-  if (!open || !screen) return null;
-
+}: {
+  open: boolean;
+  screenName: string;
+  isSubmitting: boolean;
+  error: string | null;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
   return (
-    <div className="pair-modal-overlay">
-      <div className="pair-modal">
-        <h2 className="pair-modal-title">Delete Screen</h2>
-
-        <p className="pair-modal-text">
-          Are you sure you want to remove <strong>{screen.name}</strong>?
+    <Modal open={open} title="Delete screen" onClose={onClose} width={520}>
+      <div style={{ padding: 16 }}>
+        <p style={{ margin: "0 0 10px", lineHeight: 1.45 }}>
+          You are about to delete <strong>{screenName}</strong>. This action cannot be undone.
         </p>
 
-        {error && <p className="pair-modal-error">{error}</p>}
+        {error && (
+          <pre
+            style={{
+              margin: "10px 0 0",
+              padding: "10px 12px",
+              borderRadius: 10,
+              border: "1px solid rgba(220, 38, 38, 0.3)",
+              background: "rgba(220, 38, 38, 0.06)",
+              color: "#991b1b",
+              overflow: "auto",
+            }}
+          >
+            {error}
+          </pre>
+        )}
 
-        <div className="pair-modal-actions">
-          <button className="pair-btn-cancel" onClick={onClose} disabled={isSubmitting}>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 14 }}>
+          <button type="button" className="ns2-linkbtn" onClick={onClose} disabled={isSubmitting}>
             Cancel
           </button>
 
-          <button className="pair-btn-primary" onClick={onConfirm} disabled={isSubmitting}>
-            {isSubmitting ? "Removing..." : "Delete screen"}
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={isSubmitting}
+            style={{
+              border: "1px solid rgba(185, 28, 28, 0.35)",
+              background: "#b91c1c",
+              color: "#fff",
+              padding: "10px 14px",
+              borderRadius: 10,
+              fontWeight: 800,
+              cursor: "pointer",
+            }}
+          >
+            {isSubmitting ? "Deleting..." : "Delete"}
           </button>
         </div>
       </div>
-    </div>
+    </Modal>
   );
-};
-
-export default DeleteScreenModal;
+}
 

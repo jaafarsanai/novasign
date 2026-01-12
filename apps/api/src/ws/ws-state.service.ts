@@ -118,22 +118,33 @@ export class WsStateService {
     client.emit("vs:state", state);
     client.emit("vs:playlist", playlist);
   }
-  // add to WsStateService
-async pushAdminScreenSnapshot(screenId: string) {
-  const io = this.ensureIo();
-  const s = await this.screens.getAdminScreenSnapshotById(screenId);
-  if (!s) return;
 
-  io.of("/screens").emit("screens:snapshot", s);
-}
+  async pushVirtualScreenRefresh(rawCode: string) {
+    const io = this.ensureIo();
+    const code = this.normCode(rawCode);
+    if (!code) return;
 
-async pushAdminScreenDeleted(screenId: string) {
-  const io = this.ensureIo();
-  io.of("/screens").emit("screens:deleted", { id: screenId });
-}
+    io.of("/virtual-screen").to(`code:${code}`).emit("vs:refresh", { code, ts: Date.now() });
+  }
 
   // -----------------------------
-  // Admin screens channel (NEW)
+  // Admin screens channel helpers
+  // -----------------------------
+  async pushAdminScreenSnapshot(screenId: string) {
+    const io = this.ensureIo();
+    const s = await this.screens.getAdminScreenSnapshotById(screenId);
+    if (!s) return;
+
+    io.of("/screens").emit("screens:snapshot", s);
+  }
+
+  async pushAdminScreenDeleted(screenId: string) {
+    const io = this.ensureIo();
+    io.of("/screens").emit("screens:deleted", { id: screenId });
+  }
+
+  // -----------------------------
+  // Admin screens channel (broadcast)
   // -----------------------------
   broadcastScreensChanged(reason?: string) {
     const io = this.ensureIo();

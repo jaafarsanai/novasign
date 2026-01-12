@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { randomBytes } from "crypto";
+import { randomUUID } from "node:crypto";
 
 function makeCode6() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -17,10 +17,7 @@ export type VsStatePayload = {
   updatedAt: number;
   playlistAssigned: boolean;
 
-  // tells the client if the code currently exists in DB
   exists: boolean;
-
-  // useful for UI/debug/preview
   screenId: string | null;
   isVirtual: boolean;
 };
@@ -46,30 +43,41 @@ function normalizeMediaType(raw: unknown): "image" | "video" {
   return "image";
 }
 
+type VirtualSession = {
+  id: string; // opaque id used in URL
+  pairingCode: string; // 6-char code shown on screen
+  createdAtMs: number;
+  lastAccessAtMs: number;
+};
+
 @Injectable()
 export class ScreensService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // IMPORTANT: this is in-memory ONLY. It does NOT create DB rows.
-  // It lets pairByCodeUpsert know whether a pairing code is currently coming from a Virtual Screen tab.
+  // In-memory: which pairing codes currently have an active virtual screen tab connected.
   private readonly activeVirtualCodes = new Set<string>();
 
-  // Opaque virtual sessions: id -> { pairingCode, createdAt }
-  private readonly virtualSessions = new Map<string, { pairingCode: string; createdAt: number }>();
+  // In-memory: virtual sessions (URL id -> pairing code).
+  private readonly virtualSessionsById = new Map<string, VirtualSession>();
+  private readonly virtualSessionIdByCode = new Map<string, string>();
+
+  private static readonly SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
   private normCode(code: any) {
     return String(code || "").trim().toUpperCase();
   }
 
-  private makeSessionId(): string {
-    // 16-hex chars (64-bit). Increase length if you want.
-    return randomBytes(8).toString("hex");
+  private makeSessionId() {
+    return randomUUID().replace(/-/g, "");
   }
 
-  private cleanupVirtualSessions(ttlMs = 1000 * 60 * 60) {
-    const now = Date.now();
-    for (const [id, s] of this.virtualSessions.entries()) {
-      if (now - s.createdAt > ttlMs) this.virtualSessions.delete(id);
+  private pruneVirtualSessions(now = Date.now()) {
+    for (const [id, s] of this.virtualSessionsById) {
+      if (now - s.lastAccessAtMs > ScreensService.SESSION_TTL_MS) {
+        this.virtualSessionsById.delete(id);
+        const mapped = this.virtualSessionIdByCode.get(s.pairingCode);
+        if (mapped === id) this.virtualSessionIdByCode.delete(s.pairingCode);
+      }
     }
   }
 
@@ -86,6 +94,91 @@ export class ScreensService {
   private isVirtualActive(rawCode: string) {
     const code = this.normCode(rawCode);
     return this.activeVirtualCodes.has(code);
+  }
+
+  private hasVirtualSessionForCode(rawCode: string) {
+    const code = this.normCode(rawCode);
+    return this.virtualSessionIdByCode.has(code);
+  }
+
+  async createVirtualSession() {
+    this.pruneVirtualSessions();
+
+    let pairingCode = makeCode6();
+
+    for (let i = 0; i < 40; i++) {
+      const existsInDb = await this.prisma.screen.findFirst({ where: { pairingCode } });
+      const existsInSessions = this.virtualSessionIdByCode.has(pairingCode);
+      if (!existsInDb && !existsInSessions) break;
+      pairingCode = makeCode6();
+    }
+
+    const id = this.makeSessionId();
+    const now = Date.now();
+
+    const session: VirtualSession = {
+      id,
+      pairingCode,
+      createdAtMs: now,
+      lastAccessAtMs: now,
+    };
+
+    this.virtualSessionsById.set(id, session);
+    this.virtualSessionIdByCode.set(pairingCode, id);
+
+    return { id, code: pairingCode };
+  }
+
+  ensureVirtualSessionForCode(rawCode: string) {
+    this.pruneVirtualSessions();
+
+    const code = this.normCode(rawCode);
+    if (!code || code.length !== 6) return null;
+
+    const existingId = this.virtualSessionIdByCode.get(code);
+    if (existingId && this.virtualSessionsById.has(existingId)) {
+      const s = this.virtualSessionsById.get(existingId)!;
+      s.lastAccessAtMs = Date.now();
+      return existingId;
+    }
+
+    const id = this.makeSessionId();
+    const now = Date.now();
+    const session: VirtualSession = { id, pairingCode: code, createdAtMs: now, lastAccessAtMs: now };
+
+    this.virtualSessionsById.set(id, session);
+    this.virtualSessionIdByCode.set(code, id);
+    return id;
+  }
+
+  getVirtualSessionByIdOrNull(sessionId: string) {
+    this.pruneVirtualSessions();
+
+    const id = String(sessionId || "").trim();
+    if (!id) return null;
+
+    const s = this.virtualSessionsById.get(id) ?? null;
+    if (s) s.lastAccessAtMs = Date.now();
+    return s;
+  }
+
+  getVirtualSessionIdByCodeOrNull(rawCode: string) {
+    this.pruneVirtualSessions();
+
+    const code = this.normCode(rawCode);
+    if (!code) return null;
+
+    const id = this.virtualSessionIdByCode.get(code) ?? null;
+    if (!id) return null;
+
+    const s = this.virtualSessionsById.get(id);
+    if (!s) {
+      this.virtualSessionIdByCode.delete(code);
+      return null;
+    }
+
+    s.lastAccessAtMs = Date.now();
+    return id;
   }
 
   async getByPairingCodeOrNull(pairingCode: string) {
@@ -118,7 +211,6 @@ export class ScreensService {
     await this.touchLastSeenById(s.id);
   }
 
-  // list for admin table
   async listScreens() {
     return this.prisma.screen.findMany({
       orderBy: { createdAt: "desc" },
@@ -126,73 +218,6 @@ export class ScreensService {
     });
   }
 
-  /**
-   * Create a new opaque session + pairing code (no DB insert).
-   * Returns { id, pairingCode }.
-   */
-  async createVirtualSession() {
-    this.cleanupVirtualSessions();
-
-    let pairingCode = makeCode6();
-
-    for (let i = 0; i < 20; i++) {
-      const exists = await this.prisma.screen.findFirst({ where: { pairingCode } });
-      if (!exists) break;
-      pairingCode = makeCode6();
-    }
-
-    let id = this.makeSessionId();
-    for (let i = 0; i < 10; i++) {
-      if (!this.virtualSessions.has(id)) break;
-      id = this.makeSessionId();
-    }
-
-    this.virtualSessions.set(id, { pairingCode, createdAt: Date.now() });
-    return { id, pairingCode };
-  }
-
-  /**
-   * Create an opaque session for an existing pairing code (for preview/open without exposing code in URL).
-   * Returns { id, pairingCode }.
-   */
-  async createVirtualSessionForCode(rawCode: string) {
-    this.cleanupVirtualSessions();
-
-    const pairingCode = this.normCode(rawCode);
-    if (!pairingCode || pairingCode.length !== 6) {
-      throw new NotFoundException("Invalid pairing code");
-    }
-
-    let id = this.makeSessionId();
-    for (let i = 0; i < 10; i++) {
-      if (!this.virtualSessions.has(id)) break;
-      id = this.makeSessionId();
-    }
-
-    this.virtualSessions.set(id, { pairingCode, createdAt: Date.now() });
-    return { id, pairingCode };
-  }
-
-  /**
-   * Fetch session by opaque id.
-   * Returns { id, pairingCode }.
-   */
-  async getVirtualSession(id: string) {
-    this.cleanupVirtualSessions();
-
-    const key = String(id || "").trim();
-    const s = this.virtualSessions.get(key);
-    if (!s) throw new NotFoundException("Virtual session not found");
-
-    return { id: key, pairingCode: s.pairingCode };
-  }
-
-  /**
-   * Pairing upsert:
-   * - Creates DB row ONLY when pairing happens.
-   * - If the pairing code is currently active in a /virtual-screen tab, mark isVirtual=true.
-   * - Otherwise it’s a physical/device pairing code (isVirtual=false).
-   */
   async pairByCodeUpsert(rawCode: string) {
     const pairingCode = this.normCode(rawCode);
     if (!pairingCode || pairingCode.length !== 6) {
@@ -201,8 +226,7 @@ export class ScreensService {
 
     const existing = await this.prisma.screen.findFirst({ where: { pairingCode } });
 
-    // decide virtual vs device based on whether a virtual-screen tab is currently connected with that code
-    const shouldBeVirtual = this.isVirtualActive(pairingCode);
+    const shouldBeVirtual = this.hasVirtualSessionForCode(pairingCode) || this.isVirtualActive(pairingCode);
 
     if (!existing) {
       return this.prisma.screen.create({
@@ -221,7 +245,6 @@ export class ScreensService {
       where: { id: existing.id },
       data: {
         pairedAt: new Date(),
-        // if the code is active in virtual-screen, ensure isVirtual=true
         ...(shouldBeVirtual ? { isVirtual: true } : {}),
       },
     });
@@ -242,6 +265,18 @@ export class ScreensService {
     });
   }
 
+  async renameScreenById(id: string, name: string) {
+    try {
+      return await this.prisma.screen.update({
+        where: { id },
+        data: { name },
+      });
+    } catch (e: any) {
+      if (e?.code === "P2025") throw new NotFoundException("Screen not found");
+      throw e;
+    }
+  }
+
   async deleteByIdAndReturnCode(screenId: string) {
     const s = await this.prisma.screen.findUnique({ where: { id: screenId } });
     if (!s) throw new NotFoundException("Screen not found");
@@ -251,12 +286,6 @@ export class ScreensService {
     return code;
   }
 
-  /**
-   * State for VirtualScreenPage:
-   * - If screen does not exist => PAIR, exists=false
-   * - If exists and isVirtual => WAIT/PLAY based on playlist
-   * - If exists and NOT virtual => requires pairedAt to not be PAIR
-   */
   async getVirtualScreenStatePayload(rawCode: string): Promise<VsStatePayload> {
     const code = this.normCode(rawCode);
     const updatedAt = Date.now();
@@ -297,20 +326,6 @@ export class ScreensService {
 
     const playlistAssigned = !!s.assignedPlaylistId;
 
-    // Physical device must be paired
-    if (!s.isVirtual && !s.pairedAt) {
-      return {
-        code,
-        state: "PAIR",
-        updatedAt,
-        playlistAssigned,
-        exists: true,
-        screenId: s.id,
-        isVirtual: false,
-      };
-    }
-
-    // No playlist assigned => WAITING
     if (!playlistAssigned) {
       return {
         code,
@@ -323,7 +338,6 @@ export class ScreensService {
       };
     }
 
-    // Playlist assigned => PLAYING
     return {
       code,
       state: "PLAYING",
@@ -355,11 +369,6 @@ export class ScreensService {
     });
 
     if (!s) {
-      return { code, playlistId: null, updatedAt, items: [] };
-    }
-
-    // Physical device must be paired; virtual is eligible without extra checks
-    if (!s.isVirtual && !s.pairedAt) {
       return { code, playlistId: null, updatedAt, items: [] };
     }
 
@@ -396,23 +405,15 @@ export class ScreensService {
     return { code, playlistId, updatedAt, items };
   }
 
-  async listPairedScreensByPlaylistId(playlistId: string) {
-    if (!playlistId) return [];
-    return this.prisma.screen.findMany({
-      where: {
-        assignedPlaylistId: playlistId,
-        pairedAt: { not: null },
-      },
-      select: { id: true, pairingCode: true },
-    });
-  }
-
   async getAdminScreenSnapshotById(screenId: string) {
     const s = await this.prisma.screen.findUnique({
       where: { id: screenId },
       include: { assignedPlaylist: true },
     });
     if (!s) return null;
+
+    // IMPORTANT: include virtualSessionId so Preview never breaks after WS updates
+    const virtualSessionId = s.isVirtual ? this.ensureVirtualSessionForCode(s.pairingCode) : null;
 
     return {
       id: s.id,
@@ -423,6 +424,7 @@ export class ScreensService {
       isVirtual: !!s.isVirtual,
       assignedPlaylistId: s.assignedPlaylistId ?? null,
       assignedPlaylistName: s.assignedPlaylist?.name ?? null,
+      virtualSessionId,
     };
   }
 }
