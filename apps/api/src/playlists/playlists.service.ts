@@ -18,7 +18,7 @@ export class PlaylistsService {
       select: { id: true, name: true, createdAt: true, updatedAt: true },
     });
   }
-
+  
   async get(id: string) {
     const p = await this.prisma.playlist.findUnique({
       where: { id },
@@ -27,7 +27,46 @@ export class PlaylistsService {
     if (!p) throw new NotFoundException("Playlist not found");
     return p;
   }
+async duplicateById(id: string) {
+    return this.prisma.$transaction(async (tx) => {
+      // IMPORTANT: adjust include/select to match your schema
+      // Typical: playlist has items with mediaId, order, duration
+      const src = await tx.playlist.findUnique({
+        where: { id },
+        include: {
+          items: true, // or { include: { media: true } } if you need more
+        },
+      });
 
+      if (!src) throw new NotFoundException("Playlist not found");
+
+      // Name strategy
+      const copyName = `${src.name} (copy)`;
+
+      const created = await tx.playlist.create({
+        data: {
+          name: copyName,
+          // copy other fields if you have them (tags, folderId, etc.)
+          // tags: src.tags,
+        },
+      });
+
+      // Copy items (adjust fields to match your PlaylistItem model)
+      if (src.items?.length) {
+        await tx.playlistItem.createMany({
+          data: src.items.map((it: any) => ({
+            playlistId: created.id,
+            mediaId: it.mediaId,        // adjust if different
+            order: it.order ?? 0,
+            duration: it.duration ?? null, // or durationMs depending on schema
+            // any other fields you have...
+          })),
+        });
+      }
+
+      return created;
+    });
+  }
   async listItems(playlistId: string) {
     const exists = await this.prisma.playlist.findUnique({
       where: { id: playlistId },

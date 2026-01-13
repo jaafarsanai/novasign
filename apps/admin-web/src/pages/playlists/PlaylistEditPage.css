@@ -49,6 +49,7 @@
   font-weight: 700; /* keep strong but not overly bold */
   outline: none;
   background: #fff;
+  caret-color:transparent;
 }
 
 .pe-titleinput:focus {

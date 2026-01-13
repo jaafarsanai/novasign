@@ -24,7 +24,11 @@ export class PlaylistsController {
     const name = String(body?.name ?? "New Playlist").trim() || "New Playlist";
     return this.playlists.create(name);
   }
-
+@Post(":id/duplicate")
+  async duplicate(@Param("id") id: string) {
+    const created = await this.playlists.duplicateById(id);
+    return { id: created.id };
+  }
   @Get(":id")
   async get(@Param("id") id: string) {
     return this.playlists.get(id);

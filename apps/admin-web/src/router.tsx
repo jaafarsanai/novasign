@@ -36,8 +36,10 @@ export default function Router() {
         <Route path="screens" element={<ScreensPage />} />
 
         <Route path="playlists" element={<PlaylistsPage />} />
+        <Route path="playlists/new" element={<PlaylistEditorPage/>} />
         <Route path="playlists/:id" element={<PlaylistDetailPage />} />
         <Route path="playlists/:id/edit" element={<PlaylistEditorPage />} />
+
         <Route path="/media" element={<MediaPage />} />
         <Route path="/channels" element={<ChannelsPage />} />
         <Route path="/channels/:id" element={<ChannelEditorPage />} />

@@ -1,6 +1,4 @@
-.pl-page {
-  padding: 24px;
-}
+/* src/pages/playlists/PlaylistsPage.css */
 
 .pl-header {
   display: flex;
@@ -27,7 +25,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 10px;
   padding: 8px 10px;
   min-width: 420px;
@@ -47,7 +45,7 @@
 }
 
 .pl-btn {
-  border: 1px solid rgba(0,0,0,0.12);
+  border: 1px solid rgba(0, 0, 0, 0.12);
   background: #fff;
   padding: 10px 14px;
   border-radius: 10px;
@@ -56,7 +54,7 @@
 }
 
 .pl-btn:hover {
-  background: rgba(0,0,0,0.03);
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .pl-btn-ghost {
@@ -64,13 +62,23 @@
 }
 
 .pl-btn-primary {
-  border-color: rgba(0,0,0,0.15);
+  border-color: rgba(0, 0, 0, 0.15);
   background: #111827;
   color: #fff;
 }
 
 .pl-btn-primary:hover {
   background: #0b1220;
+}
+
+.pl-btn-danger {
+  border: 1px solid #ffb3b3;
+  color: #d10000;
+  background: #fff;
+}
+
+.pl-btn-danger:hover {
+  background: #fff5f5;
 }
 
 .pl-error {
@@ -83,22 +91,31 @@
   margin-bottom: 16px;
 }
 
+/* Page layout to keep pager at the bottom of the page content */
+.pl-page {
+  min-height: calc(100vh - 24px); /* adjust if you have a top header */
+  display: flex;
+  flex-direction: column;
+}
+
 .pl-list {
+  flex: 1 1 auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
+/* Rows */
 .pl-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   border-radius: 14px;
   background: #fff;
   padding: 14px;
-  box-shadow: 0 1px 0 rgba(0,0,0,0.02);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
 }
 
 .pl-row-left {
@@ -112,27 +129,29 @@
   width: 38px;
   height: 38px;
   border-radius: 10px;
-  border: 1px solid rgba(0,0,0,0.10);
+  border: 1px solid rgba(0, 0, 0, 0.1);
   display: grid;
   place-items: center;
-  background: rgba(0,0,0,0.02);
+  background: rgba(0, 0, 0, 0.02);
   flex: 0 0 auto;
 }
-/* Mask-based icon (preferred) */
+
+/* Mask-based playlist icon (preferred) */
 .pl-icon-playlist::before {
   content: "";
   width: 22px;
   height: 22px;
-  background: rgba(0,0,0,0.75);
+  background: rgba(0, 0, 0, 0.75);
   -webkit-mask: url("/assets/icons/playlist.svg") center center / contain no-repeat;
   mask: url("/assets/icons/playlist.svg") center center / contain no-repeat;
 }
 
 /* Hide the fallback span when mask works */
 @supports ((mask: url("x") center/contain no-repeat) or (-webkit-mask: url("x") center/contain no-repeat)) {
-  .pl-icon > span { display: none; }
+  .pl-icon > span {
+    display: none;
+  }
 }
-
 
 .pl-name {
   font-weight: 800;
@@ -154,49 +173,110 @@
   gap: 10px;
 }
 
+/* --- Icon buttons (Duplicate/Delete/Open) --- */
+.pl-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pl-iconbtn {
+  width: 40px;
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid #e6e8ee;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pl-iconbtn svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.pl-iconbtn:hover {
+  background: #f7f8fb;
+}
+
+.pl-iconbtn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.pl-iconbtn-danger {
+  border-color: #ffd2d2;
+  color: #d11a2a;
+}
+
+.pl-iconbtn-danger:hover {
+  background: #fff5f5;
+}
+
+/* --- Pagination (styled + inline) --- */
 .pl-pager {
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
+
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 14px;
-  padding: 10px 12px;
-  border: 1px solid rgba(0,0,0,0.10);
-  border-radius: 14px;
-  background: #fff;
+  flex-wrap: nowrap;
 }
 
+/* If you want it always visible while scrolling, uncomment:
+.pl-pager {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+}
+*/
+
 .pl-pager-left {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .pl-pager-count {
+  white-space: nowrap;
   font-size: 13px;
-  opacity: 0.8;
+  color: rgba(0, 0, 0, 0.7);
 }
 
 .pl-pager-size {
-  border: 1px solid rgba(0,0,0,0.12);
+  height: 34px;
+  padding: 0 10px;
   border-radius: 10px;
-  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
   background: #fff;
-  font-weight: 650;
-  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
 }
 
 .pl-pager-right {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .pl-pager-btn {
-  border: 1px solid rgba(0,0,0,0.12);
+  height: 34px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
   background: #fff;
-  padding: 8px 10px;
+  padding: 0 12px;
   border-radius: 10px;
   cursor: pointer;
   font-weight: 700;
@@ -204,11 +284,33 @@
 }
 
 .pl-pager-btn:hover {
-  background: rgba(0,0,0,0.03);
+  background: rgba(0, 0, 0, 0.03);
 }
 
 .pl-pager-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+/* --- Delete modal --- */
+.pl-del-body {
+  padding: 6px 2px;
+}
+
+.pl-del-title {
+  font-weight: 700;
+  font-size: 16px;
+  margin-bottom: 6px;
+}
+
+.pl-del-sub {
+  color: #6b7280;
+  margin-bottom: 16px;
+}
+
+.pl-del-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
