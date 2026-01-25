@@ -3,6 +3,9 @@ import { useNavigate, useParams } from "react-router-dom";
 import "./ChannelEditorPage.css";
 import { coverFromSeed, getChannelCoverSeed } from "./channelCover";
 import { ALL_LAYOUTS, LayoutDef, Zone } from "./layouts/ChannelLayouts";
+import ChannelContentPickerModal, { PickerResult } from "./components/ChannelContentPickerModal";
+
+
 
 type Orientation = "landscape" | "portrait";
 
@@ -678,6 +681,7 @@ function ChooseLayoutModal({
     y: 0,
   });
 
+
   useEffect(() => {
     if (open) setPicked(currentLayoutId);
   }, [open, currentLayoutId]);
@@ -765,6 +769,7 @@ export default function ChannelEditorPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+const [contentPickerOpen, setContentPickerOpen] = useState(false);
   const [channel, setChannel] = useState<Channel | null>(null);
 
   const [layoutId, setLayoutId] = useState<string>("layout_main");
@@ -1088,7 +1093,7 @@ const updatedLabel =
               </div>
             </div>
 
-            <button className="btn btn-ghost" onClick={() => {}} type="button">
+            <button className="btn btn-ghost" onClick={() => setContentPickerOpen(true)} type="button">
               + Add Content
             </button>
           </div>
@@ -1383,6 +1388,17 @@ const updatedLabel =
           setLayoutModalOpen(false);
         }}
       />
+   <ChannelContentPickerModal
+  open={contentPickerOpen}
+  onClose={() => setContentPickerOpen(false)}
+  onConfirm={(items: PickerResult[]) => {
+    // For now: just close. Next step will assign to active zone with duration/schedule.
+    console.log("Picked items:", items);
+    setContentPickerOpen(false);
+  }}
+/>
+
+
     </div>
   );
 }
