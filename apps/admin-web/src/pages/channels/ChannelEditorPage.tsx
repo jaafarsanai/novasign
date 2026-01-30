@@ -1423,6 +1423,35 @@ const [saveMsg, setSaveMsg] = useState<string | null>(null);
 const [playlistMeta, setPlaylistMeta] = useState<Record<string, PlaylistMeta>>({});
 const playlistMetaReqInFlight = useRef<Set<string>>(new Set());
 
+// drag & drop (reorder)
+const [dragItemId, setDragItemId] = useState<string | null>(null);
+const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+
+function reorderItemsInZone(zoneId: string, fromItemId: string, toItemId: string) {
+  if (fromItemId === toItemId) return;
+
+  setZoneContents((prev) => {
+    const list = prev[zoneId] ?? [];
+    // Work on a stable ordered list
+    const ordered = list.slice().sort((a, b) => a.order - b.order);
+
+    const fromIndex = ordered.findIndex((x) => x.id === fromItemId);
+    const toIndex = ordered.findIndex((x) => x.id === toItemId);
+    if (fromIndex < 0 || toIndex < 0) return prev;
+
+    const [moved] = ordered.splice(fromIndex, 1);
+    ordered.splice(toIndex, 0, moved);
+
+    // normalize order
+    const normalized = ordered.map((x, idx) => ({ ...x, order: idx }));
+    return { ...prev, [zoneId]: normalized };
+  });
+
+  clearNoop(setSaveStatus);
+  setHasChanges(true);
+  setSaveMsg(null);
+}
+
 function toNum(v: unknown): number | null {
   if (typeof v === "number" && Number.isFinite(v)) return v;
   if (typeof v === "string") {
@@ -2435,7 +2464,35 @@ const dur = getDisplayDurationSec(it);
                     const schedules = getItemSchedules(it);
 
                     return (
-                      <div key={it.id} className={`ce-zoneRow ${idx === activeZoneItems.length - 1 ? "is-last" : ""}`}>
+                      <div
+  key={it.id}
+  className={`ce-zoneRow ${idx === activeZoneItems.length - 1 ? "is-last" : ""} ${
+    dragOverItemId === it.id ? "is-dragover" : ""
+  }`}
+  onDragOver={(e) => {
+    // required to allow drop
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+  }}
+  onDragEnter={(e) => {
+    e.preventDefault();
+    if (dragItemId && dragItemId !== it.id) setDragOverItemId(it.id);
+  }}
+  onDragLeave={() => {
+    if (dragOverItemId === it.id) setDragOverItemId(null);
+  }}
+  onDrop={(e) => {
+    e.preventDefault();
+    const dragged = e.dataTransfer.getData("text/plain") || dragItemId;
+    if (!dragged) return;
+    if (dragged === it.id) return;
+
+    reorderItemsInZone(activeZoneId, dragged, it.id);
+    setDragItemId(null);
+    setDragOverItemId(null);
+  }}
+>
+
                         {/* Thumbnail */}
                         <button type="button" onClick={() => openPreview(it)} className="ce-zoneThumbBtn" title="Preview">
                           {thumb ? (
@@ -2554,14 +2611,24 @@ const dur = getDisplayDurationSec(it);
                             </button>
 
                             <button
-                              type="button"
-                              aria-label="Drag"
-                              title="Reorder (drag UI placeholder)"
-                              className="ce-zoneIconBtn ce-zoneDragBtn"
-                              onMouseDown={(e) => e.preventDefault()}
-                            >
-                              ☰
-                            </button>
+  type="button"
+  aria-label="Drag"
+  title="Drag to reorder"
+  className="ce-zoneIconBtn ce-zoneDragBtn"
+  draggable
+  onDragStart={(e) => {
+    setDragItemId(it.id);
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", it.id);
+  }}
+  onDragEnd={() => {
+    setDragItemId(null);
+    setDragOverItemId(null);
+  }}
+>
+  ☰
+</button>
+
                           </div>
                         </div>
                       </div>
