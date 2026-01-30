@@ -1423,9 +1423,37 @@ const [saveMsg, setSaveMsg] = useState<string | null>(null);
 const [playlistMeta, setPlaylistMeta] = useState<Record<string, PlaylistMeta>>({});
 const playlistMetaReqInFlight = useRef<Set<string>>(new Set());
 
+function toNum(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+function toSecondsAutoAny(v: unknown): number | null {
+  const n = toNum(v);
+  if (n == null) return null;
+
+  // If it looks like milliseconds:
+  // - many APIs send ms in [1000..86,400,000]
+  // - also if divisible by 1000 it's very likely ms
+  if (n >= 1000 && (n % 1000 === 0 || n <= 86_400_000)) return Math.round(n / 1000);
+
+  // otherwise treat as seconds
+  return Math.round(n);
+}
+
 async function resolvePlaylistMeta(playlistId: string) {
   if (!playlistId) return;
-  if (playlistMeta[playlistId]) return;
+  const cached = playlistMeta[playlistId]?.totalDurationSec;
+if (typeof cached === "number" && cached > 0) {
+  // If cached is absurdly large for seconds (or was ms mistakenly stored), allow refresh:
+  if (cached < 86_400) return; // keep cache if < 24h
+  // else continue and recompute
+}
+
   if (playlistMetaReqInFlight.current.has(playlistId)) return;
 
   playlistMetaReqInFlight.current.add(playlistId);
@@ -1448,11 +1476,11 @@ async function resolvePlaylistMeta(playlistId: string) {
 
         // If backend already provides total duration
         const directTotal =
-          typeof root.totalDurationSec === "number"
-            ? root.totalDurationSec
-            : typeof root.totalDuration === "number"
-            ? root.totalDuration
-            : null;
+  toSecondsAutoAny(root.totalDurationSec) ??
+  toSecondsAutoAny(root.totalDurationMs) ??
+  toSecondsAutoAny(root.totalDuration);
+
+
 
         // Try to extract items array and sum durations
         const items: any[] =
@@ -1467,13 +1495,10 @@ async function resolvePlaylistMeta(playlistId: string) {
         let hasAny = false;
         for (const it of items) {
           const d =
-            typeof it.durationSec === "number"
-              ? it.durationSec
-              : typeof it.duration === "number"
-              ? it.duration
-              : typeof it.durationMs === "number"
-              ? Math.round(it.durationMs / 1000)
-              : null;
+  toSecondsAutoAny(it.durationSec) ??
+  toSecondsAutoAny(it.durationMs) ??
+  toSecondsAutoAny(it.duration);
+
 
           if (typeof d === "number" && d > 0) {
             sum += d;
@@ -1482,6 +1507,7 @@ async function resolvePlaylistMeta(playlistId: string) {
         }
 
         const total = typeof directTotal === "number" && directTotal > 0 ? directTotal : hasAny ? sum : null;
+        console.log("playlist meta raw", playlistId, { root, itemsLen: items.length, directTotal, sum });
 
         setPlaylistMeta((prev) => ({
           ...prev,
@@ -1621,20 +1647,15 @@ const thumb =
   null;
 
 
-        const dur =
-          typeof row.durationSec === "number"
-            ? row.durationSec
-            : typeof row.duration === "number"
-            ? row.duration
-            : typeof row.durationMs === "number"
-            ? Math.round(row.durationMs / 1000)
-            : null;
+        
+  
+
 
         setMediaMeta((prev) => ({
           ...prev,
           [sourceId]: {
             thumbnailUrl: thumb,
-            durationSec: dur,
+            durationSec: typeof row.durationSec === "number" ? row.durationSec : 10,
             mediaType: type,
             name: row.name ?? row.title ?? undefined,
             url,
@@ -2239,6 +2260,15 @@ useEffect(() => {
     }
     return it.durationSec;
   }
+function getDisplayDurationSec(it: ZoneContentItem): number {
+  if (it.sourceType === "playlist") {
+    const raw = playlistMeta[it.sourceId]?.totalDurationSec ?? it.durationSec;
+    // normalize possible ms/seconds
+    const v = toSecondsAutoAny(raw);
+    return v ?? 0;
+  }
+  return getEffectiveDuration(it);
+}
 
   function updateItemInZone(zoneId: string, itemId: string, patch: Partial<ZoneContentItem>) {
     setZoneContents((prev) => {
@@ -2393,10 +2423,9 @@ useEffect(() => {
                 ) : (
                   activeZoneItems.map((it, idx) => {
                     const thumb = getItemThumb(it);
-                    const dur =
-                      it.sourceType === "playlist"
-                        ? (playlistMeta[it.sourceId]?.totalDurationSec ?? it.durationSec)
-                        : getEffectiveDuration(it);
+                    const rawPlaylistDur = playlistMeta[it.sourceId]?.totalDurationSec ?? it.durationSec;
+const dur = getDisplayDurationSec(it);
+
 
                     const isPlaylist = it.sourceType === "playlist";
                     const isVideo = it.sourceType === "media" && it.mediaType === "video";
@@ -2885,39 +2914,43 @@ useEffect(() => {
                 null;
 
               const pickedDur =
-                typeof (it.item as any)?.durationSec === "number"
-                  ? (it.item as any)?.durationSec
-                  : typeof (it.item as any)?.duration === "number"
-                  ? (it.item as any)?.duration
-                  : typeof (it.item as any)?.durationMs === "number"
-                  ? Math.round((it.item as any)?.durationMs / 1000)
-                  : null;
+  typeof (it.item as any)?.durationSec === "number"
+    ? (it.item as any).durationSec
+    : typeof (it.item as any)?.duration === "number"
+    ? (it.item as any).duration
+    : typeof (it.item as any)?.durationMs === "number"
+    ? Math.round((it.item as any).durationMs / 1000)
+    : null;
 
-              const durationSec =
-                sourceType === "media"
-                  ? mediaType === "image"
-                    ? 10
-                    : typeof pickedDur === "number" && pickedDur > 0
-                    ? pickedDur
-                    : 0 // will be resolved from meta fetch
-                  : 10;
+// ✅ IMPORTANT:
+// - images: default 10s editable
+// - videos: use picked duration if provided else 0 (will be resolved later by resolveMediaMeta)
+// - playlists: set 0 and let resolvePlaylistMeta fill playlistMeta for UI display
+const durationSec =
+  sourceType === "media"
+    ? mediaType === "image"
+      ? 10
+      : typeof pickedDur === "number" && pickedDur > 0
+      ? pickedDur
+      : 0
+    : 0;
+const schedules = [defaultSchedule()];
 
-              const schedules = [defaultSchedule()];
+const next: ZoneContentItem = {
+  id: crypto.randomUUID(),
+  sourceType,
+  sourceId,
+  name,
+  mediaType,
+  durationSec: durationSec, // ✅ no shorthand
+  order: existing.length + idx,
+  startAt: null,
+  endAt: null,
+  thumbnailUrl: thumb,
+  schedules: schedules,
+  schedule: schedules[0],
+};
 
-              const next: ZoneContentItem = {
-                id: crypto.randomUUID(),
-                sourceType,
-                sourceId,
-                name,
-                mediaType,
-                durationSec,
-                order: existing.length + idx,
-                startAt: null,
-                endAt: null,
-                thumbnailUrl: thumb,
-                schedules,
-                schedule: schedules[0],
-              };
 
               return next;
             });
@@ -2931,6 +2964,7 @@ useEffect(() => {
           // resolve media meta for new media items (thumbnail + video duration)
           for (const it of items) {
             if (it.type === "media") void resolveMediaMeta(it.item.id);
+            if (it.type === "playlist") void resolvePlaylistMeta(it.item.id);
           }
 
           setContentPickerOpen(false);
