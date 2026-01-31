@@ -648,6 +648,26 @@ function ensureSchedules(it: ZoneContentItem): ZoneItemSchedule[] {
   return [defaultSchedule()];
 }
 
+const THUMB_BOX_W = 240;
+const THUMB_BOX_H = 140;
+
+function fitIntoBox(w: number, h: number, boxW = THUMB_BOX_W, boxH = THUMB_BOX_H) {
+  const r = w / h;
+  const boxR = boxW / boxH;
+
+  if (r >= boxR) {
+    // fit by width
+    const width = boxW;
+    const height = boxW / r;
+    return { width, height };
+  } else {
+    // fit by height
+    const height = boxH;
+    const width = boxH * r;
+    return { width, height };
+  }
+}
+
 /** ======================= Modals ======================= */
 
 function ChannelSizeModal({
@@ -1204,8 +1224,35 @@ function LayoutThumb({
 }) {
   const [hoverId, setHoverId] = useState<string | null>(null);
 
+  const isLandscape = width >= height;
+
+  /**
+   * Goal:
+   * - Portrait thumbs: keep your previous “tall” preview (looks good already)
+   * - Landscape thumbs: make them bigger by letting them use FULL available width
+   *   (so they don’t look like tiny strips)
+   */
+  const thumbStyle: React.CSSProperties = isLandscape
+    ? {
+        // ✅ Landscape: fill the card width, height is derived from aspect-ratio
+        width: "100%",
+        height: "auto",
+        aspectRatio: `${width} / ${height}`,
+        margin: "0 auto",
+        display: "block",
+      }
+    : {
+        // ✅ Portrait: keep a fixed visual height, center it
+        height: 300,
+        width: "auto",
+        maxWidth: "100%",
+        aspectRatio: `${width} / ${height}`,
+        margin: "0 auto",
+        display: "block",
+      };
+
   return (
-    <div className="ce-layout-thumb">
+    <div className="ce-layout-thumb" style={thumbStyle}>
       {layout.zones.map((z, idx) => {
         const isActive = activeZoneId === z.id;
         const isHover = hoverId === z.id;
@@ -1247,6 +1294,9 @@ function LayoutThumb({
   );
 }
 
+
+
+
 function ChooseLayoutModal({
   open,
   layouts,
@@ -1255,28 +1305,39 @@ function ChooseLayoutModal({
   height,
   onClose,
   onSelect,
-  onCustomize,
 }: {
   open: boolean;
   layouts: LayoutDef[];
   currentLayoutId: string;
-  width: number;
-  height: number;
+  width?: number;
+  height?: number;
   onClose: () => void;
   onSelect: (layoutId: string) => void;
-  onCustomize: () => void;
+  
 }) {
-  const [tab, setTab] = useState<"all" | "custom">("all");
+  const w = width ?? 1920;
+  const h = height ?? 1080;
+
+  const [tab, setTab] = useState<"all">("all");
   const [picked, setPicked] = useState(currentLayoutId);
-  const [hover, setHover] = useState<{ txt: string | null; x: number; y: number }>({ txt: null, x: 0, y: 0 });
+  const [hover, setHover] = useState<{ txt: string | null; x: number; y: number }>({
+    txt: null,
+    x: 0,
+    y: 0,
+  });
 
   useEffect(() => {
     if (open) setPicked(currentLayoutId);
-  }, [open, currentLayoutId]);
+  }, [open, currentLayoutId, setPicked]);
 
   if (!open) return null;
 
-  const shown = tab === "all" ? layouts : [];
+  const required: "landscape" | "portrait" = w >= h ? "landscape" : "portrait";
+
+  const shown = (tab === "all" ? layouts : []).filter((l) => {
+    const o = l.orientation ?? "any";
+    return o === "any" || o === required;
+  });
 
   return (
     <div className="clm-backdrop" role="dialog" aria-modal="true">
@@ -1297,13 +1358,7 @@ function ChooseLayoutModal({
             >
               ALL LAYOUTS
             </button>
-            <button
-              className={`clm-tab ${tab === "custom" ? "is-active" : ""}`}
-              onClick={() => setTab("custom")}
-              type="button"
-            >
-              CUSTOM LAYOUTS
-            </button>
+           
           </div>
         </div>
 
@@ -1316,13 +1371,22 @@ function ChooseLayoutModal({
                 onClick={() => setPicked(l.id)}
                 type="button"
               >
-                <LayoutThumb
-                  layout={l}
-                  width={width}
-                  height={height}
-                  onHover={(txt, x, y) => setHover({ txt, x, y })}
-                  showBadges={false}
-                />
+                <div className="ce-layout-thumb" style={{ aspectRatio: `${w} / ${h}` }}>
+                  {(l.zones ?? []).map((z) => (
+                    <div
+                      key={z.id ?? z.name}
+                      className="ce-layout-zone"
+                      style={{
+                        left: `${z.x}%`,
+                        top: `${z.y}%`,
+                        width: `${z.w}%`,
+                        height: `${z.h}%`,
+                      }}
+                      title={z.name}
+                    />
+                  ))}
+                </div>
+
                 <div className="layout-name">{l.name}</div>
               </button>
             ))}
@@ -1330,9 +1394,7 @@ function ChooseLayoutModal({
         </div>
 
         <div className="clm-footer">
-          <button className="btn btn-ghost" onClick={onCustomize} type="button">
-            Customize
-          </button>
+          
           <button className="btn btn-primary" onClick={() => onSelect(picked)} type="button">
             Select
           </button>
@@ -1977,6 +2039,13 @@ setSaveMsg(null);
   }, [zoneContents, id]);
 
   /* -------------------- EXISTING LOGIC BELOW -------------------- */
+const effectiveOrientation: Orientation =
+  channel?.orientation ?? (height > width ? "portrait" : "landscape");
+
+
+const layoutsForOrientation = useMemo(() => {
+  return ALL_LAYOUTS.filter(l => !l.orientation || l.orientation === "any" || l.orientation === effectiveOrientation);
+}, [effectiveOrientation]);
 
   const layout = useMemo<LayoutDef>(() => ALL_LAYOUTS.find((l: LayoutDef) => l.id === layoutId) ?? ALL_LAYOUTS[0], [layoutId]);
 
@@ -2110,8 +2179,14 @@ if (ch.zones && typeof ch.zones === "object") {
       const uiLayoutId = apiLayoutToUi(ch.layoutId);
       const initialLayout = ALL_LAYOUTS.find((l) => l.id === uiLayoutId) ?? ALL_LAYOUTS[0];
 
-      const initialWidth = ch.width || 1920;
-      const initialHeight = ch.height || 1080;
+      const fallbackDim =
+  ch.orientation === "portrait"
+    ? { w: 1080, h: 1920 }
+    : { w: 1920, h: 1080 };
+
+const initialWidth = typeof ch.width === "number" && ch.width > 0 ? ch.width : fallbackDim.w;
+const initialHeight = typeof ch.height === "number" && ch.height > 0 ? ch.height : fallbackDim.h;
+
 
       setLayoutId(uiLayoutId);
       setWidth(initialWidth);
@@ -2940,7 +3015,7 @@ const dur = getDisplayDurationSec(it);
 
       <ChooseLayoutModal
         open={layoutModalOpen}
-        layouts={ALL_LAYOUTS}
+        layouts={layoutsForOrientation}
         currentLayoutId={layoutId}
         width={width}
         height={height}
@@ -2949,9 +3024,7 @@ const dur = getDisplayDurationSec(it);
           setLayoutId(nextId);
           setLayoutModalOpen(false);
         }}
-        onCustomize={() => {
-          setLayoutModalOpen(false);
-        }}
+        
       />
 
       <ChannelContentPickerModal

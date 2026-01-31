@@ -223,23 +223,40 @@
 }
 
 .ce-layout-preview {
-  margin-top: 12px;
-  display: grid;
-  gap: 12px;
+   display: flex;
+  flex-direction: column;
+  align-items: center; 
 }
-
-.ce-layout-thumb-wrap {
-  position: relative;
+.layout-preview .ce-layout-thumb{
+  margin: 0 auto;
 }
-
-.ce-layout-thumb {
+/* Center the layout preview box inside the side panel */
+.ce-layout-thumb-wrap{
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  border-radius: 14px;
-  background: #111827;
-  position: relative;
-  overflow: hidden;
+  padding: 10px 0;
 }
+
+.ce-layout-thumbbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ce-layout-thumb {
+  position: relative;
+}
+
+
+/* Zones inside preview */
+.ce-layout-thumb .ce-zone{
+  position: absolute;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: rgba(107, 114, 128, 0.55);
+}
+
+
 
 /* Zones in thumbs (ScreenCloud-like) */
 .ce-zone {
@@ -1963,4 +1980,22 @@
 .ce-zoneRow.is-dragover {
   outline: 2px solid rgba(19, 42, 102, 0.35);
   outline-offset: -2px;
+}
+.ce-layout-thumb {
+  width: 50%;
+  max-height: 300px; /* pick what fits your sidebar */
+  height: auto;
+  position: relative;
+  background: #f3f4f6;
+  overflow: hidden;
+
+}
+
+.ce-layout-zone {
+  position: absolute;
+  background: #4b5563; /* dark gray */
+  opacity: 0.9;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  box-sizing: border-box;
+
 }
