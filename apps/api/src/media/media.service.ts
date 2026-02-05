@@ -171,6 +171,10 @@ export class MediaService {
     return { ok: true, count: uniq.length };
   }
 
+async getById(id: string) {
+  return this.prisma.media.findUnique({ where: { id: String(id) } });
+}
+
   /**
    * If multer used diskStorage, file.filename exists and file is already persisted.
    * If memoryStorage, file.buffer exists but filename does not. We persist it.
