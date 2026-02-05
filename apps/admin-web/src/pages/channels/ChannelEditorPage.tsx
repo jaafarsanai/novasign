@@ -1,9 +1,12 @@
 // ChannelEditorPage.tsx
 // FULL FILE — ScreenCloud-style zone content list + scheduling modal (with safe backend fallbacks)
+//
 // Updated:
 // 1) Weekly vs Specific date only are now mutually exclusive + switchable back/forth reliably
-// 2) "Add" under EVERYDAY now adds a new schedule row (does NOT open modal)
+// 2) "Add schedule" adds a new schedule row (does NOT open modal)
 // 3) Multiple schedules per item supported (UI-first; backend persistence attempted, with safe fallback)
+// 4) Thumbnails + video duration + preview now use UI-only url/posterUrl fallbacks
+// 5) EndTime clamping applies ONLY when date range is a single day (dateStart === dateEnd)
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -11,9 +14,25 @@ import "./ChannelEditorPage.css";
 import { coverFromSeed, getChannelCoverSeed } from "./channelCover";
 import { ALL_LAYOUTS, LayoutDef } from "./layouts/ChannelLayouts";
 import ChannelContentPickerModal, { PickerResult } from "./components/ChannelContentPickerModal";
+import { ensureSchedules as ensureSchedulesShared } from "../../lib/scheduling";
+
+// ---- time helpers (required by schedule editor) ----
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+function normalizeTimeToHms(t: string) {
+  const parts = String(t ?? "").split(":").map((x) => x.trim());
+  const hh = Math.max(0, Math.min(23, Number(parts[0] || 0) || 0));
+  const mm = Math.max(0, Math.min(59, Number(parts[1] || 0) || 0));
+  const ss = Math.max(0, Math.min(59, Number(parts[2] || 0) || 0));
+  return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
+}
+function timeToSec(hms: string) {
+  const [h, m, s] = normalizeTimeToHms(hms).split(":").map(Number);
+  return (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
+}
 
 /* -------------------- ZONE CONTENT (types) -------------------- */
-
 type Weekday = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
 
 type ScheduleTimeWindow = {
@@ -28,44 +47,41 @@ type ZoneItemSchedule = {
   // ScreenCloud-like:
   mode: "everyday" | "weekly"; // default everyday (all week)
   weeklyDays: Weekday[]; // used when mode=weekly
+
   dateOnlyEnabled: boolean; // "Specific date only" tab engaged (mutually exclusive with weekly tab)
   dateStart: string | null; // YYYY-MM-DD
   dateEnd: string | null; // YYYY-MM-DD
   timeWindows: ScheduleTimeWindow[]; // optional time windows (applies when dateOnlyEnabled)
+
   playInFullScreen: boolean;
   priority: boolean;
 };
 
 type ZoneContentItem = {
-  id: string; // client-side id for local ordering
+  id: string;
   sourceType: "media" | "playlist";
   sourceId: string;
   name: string;
   mediaType?: "image" | "video";
-  durationSec: number; // images default editable; video should be real and not editable
+  durationSec: number;
   order: number;
-
-  // legacy backend fields (keep)
   startAt: string | null;
   endAt: string | null;
 
-  // UI fields (attempt to persist if backend allows; otherwise stripped on fallback)
   thumbnailUrl?: string | null;
 
-  // NEW: multiple schedules per item (UI-first)
-  schedules?: ZoneItemSchedule[];
+  // ✅ UI-only fallback fields (safe if backend strips them)
+  url?: string | null; // direct playable url (video/image)
+  posterUrl?: string | null; // optional poster for video
 
-  // legacy single schedule (optional if backend only supports one)
+  schedules?: ZoneItemSchedule[];
   schedule?: ZoneItemSchedule;
 };
 
 /* ------------------------------------------------------------------- */
-
 type Orientation = "landscape" | "portrait";
 
-/**
- * UI Transition model (richer than backend, but we map to backend "transition" on save)
- */
+/** UI Transition model (richer than backend, but we map to backend "transition" on save) */
 type TransitionMain = "cut" | "fade" | "slide" | "push" | "wipe" | "zoom";
 type TransitionDirection = "left" | "right" | "up" | "down";
 type TransitionEasing = "linear" | "ease-in-out";
@@ -100,7 +116,6 @@ type Channel = {
   transition?: ApiChannelTransition;
   width?: number;
   height?: number;
-
   zones?: Record<
     string,
     Array<{
@@ -113,13 +128,13 @@ type Channel = {
       sourceType: "media" | "playlist";
       durationSec: number;
 
-      // optional (may exist if backend supports)
       thumbnailUrl?: string | null;
 
-      // single schedule (legacy)
-      schedule?: ZoneItemSchedule;
+      // (backend might not include these; safe if absent)
+      url?: string | null;
+      posterUrl?: string | null;
 
-      // multiple schedules (future / optional)
+      schedule?: ZoneItemSchedule;
       schedules?: ZoneItemSchedule[];
     }>
   >;
@@ -130,7 +145,6 @@ type SaveStatus = "idle" | "saving" | "saved" | "noop" | "error";
 const API_BASE = "/api/channels";
 
 /** ---------------- Robust fetch helpers ---------------- */
-
 class ApiError extends Error {
   status?: number;
   url?: string;
@@ -144,9 +158,114 @@ class ApiError extends Error {
   }
 }
 
+function isLikelyDbId(v: any) {
+  const s = String(v ?? "");
+  // your ids look like: cml6d9lgk000710l07xud1jmo (base-ish)
+  return /^[a-z0-9]{16,}$/i.test(s) && !s.includes(".") && !s.includes("/");
+}
+
+function toAbsoluteIfNeeded(url: string) {
+  if (!url) return url;
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  // keep as relative -> browser will resolve against origin
+  return url.startsWith("/") ? url : `/${url}`;
+}
+
+/**
+ * Build the real public URL served by nginx/static: /media/<filename.ext>
+ * This is the key fix.
+ */
+function buildPublicMediaUrlFromItem(item: any): string | null {
+  if (!item) return null;
+
+  // 1) If backend already provides a public URL
+  const direct =
+    item.publicUrl ??
+    item.url ??
+    item.fileUrl ??
+    item.downloadUrl ??
+    item.previewUrl ??
+    item.thumbnailUrl ??
+    item.thumbUrl ??
+    item.thumbnail ??
+    null;
+
+  // If direct looks good (has extension or is clearly a real file url), keep it
+  if (typeof direct === "string" && direct.trim()) {
+    const u = direct.trim();
+    const last = u.split("/").pop() || "";
+    const hasExt = /\.[a-z0-9]{2,5}($|\?)/i.test(last);
+    if (hasExt) return toAbsoluteIfNeeded(u);
+
+    // If it looks like /media/<id> without extension -> likely wrong
+    if (u.includes("/media/") && isLikelyDbId(last)) {
+      // fall through to filename-based
+    } else {
+      // could still be valid (signed url without ext), but in your case it isn't.
+      // keep it only if you want; I recommend falling back to filename fields.
+    }
+  }
+
+  // 2) Try filename/path-like fields
+  const filename =
+    item.fileName ??
+    item.filename ??
+    item.originalName ??
+    item.storedName ??
+    item.objectName ??
+    item.key ??
+    item.path ??
+    item.storagePath ??
+    item.relativePath ??
+    item.file_path ??
+    null;
+
+  if (typeof filename === "string" && filename.trim()) {
+    const f = filename.trim().replace(/^\/+/, ""); // remove leading slashes
+    // if backend stores full path like "media/xxx.png" -> normalize to /media/xxx.png
+    if (f.startsWith("media/")) return `/${f}`;
+    // if backend stores just "xxx.png" -> prefix /media/
+    return `/media/${f}`;
+  }
+
+  return null;
+}
+
+function buildThumbUrlFromItem(item: any): string | null {
+  if (!item) return null;
+
+  // Prefer explicit thumbnail fields
+  const t =
+    item.thumbnailUrl ??
+    item.thumbUrl ??
+    item.thumbnail ??
+    item.posterUrl ??
+    null;
+
+  const resolved = typeof t === "string" ? t.trim() : "";
+  if (resolved) {
+    const last = resolved.split("/").pop() || "";
+    const hasExt = /\.[a-z0-9]{2,5}($|\?)/i.test(last);
+    if (hasExt) return toAbsoluteIfNeeded(resolved);
+    if (resolved.includes("/media/") && isLikelyDbId(last)) {
+      // wrong style, will use filename fallback
+    } else {
+      return toAbsoluteIfNeeded(resolved);
+    }
+  }
+
+  // fallback: public media url (images can use same url as thumb)
+  return buildPublicMediaUrlFromItem(item);
+}
+
 function looksLikeHtml(txt: string) {
   const t = txt.trim().toLowerCase();
   return t.startsWith("<!doctype") || t.startsWith("<html") || t.startsWith("<head") || t.startsWith("<body");
+}
+
+// Small helper to prevent accidental undefined/empty message from getting thrown above if edited later.
+function toggleMsg(msg: string) {
+  return msg || "Request failed";
 }
 
 async function fetchJsonStrict<T>(url: string, init?: RequestInit): Promise<T> {
@@ -179,7 +298,6 @@ async function fetchJsonStrict<T>(url: string, init?: RequestInit): Promise<T> {
       bodySnippet,
     });
   }
-
   try {
     return JSON.parse(txt) as T;
   } catch (e: any) {
@@ -191,19 +309,12 @@ async function fetchJsonStrict<T>(url: string, init?: RequestInit): Promise<T> {
   }
 }
 
-// Small helper to prevent accidental undefined/empty message from getting thrown above if edited later.
-function toggleMsg(msg: string) {
-  return msg || "Request failed";
-}
-
 function humanizeError(e: any): string {
   const msg = String(e?.message ?? "Unknown error").trim();
-
   if (msg.toLowerCase().includes("received html")) return msg;
   if (msg.toLowerCase().includes("cannot patch")) return "PATCH not supported on this API route.";
   if (msg.toLowerCase().includes("cannot put")) return "PUT not supported on this API route.";
   if (msg.toLowerCase().includes("not allowed") || e?.status === 405) return "Method not allowed (405).";
-
   return msg;
 }
 
@@ -219,18 +330,11 @@ function formatBytes(n?: number | null) {
   return `${v.toFixed(i === 0 ? 0 : 2)} ${units[i]}`;
 }
 
-function getBestMediaUrl(it: ZoneContentItem, meta?: MediaMeta) {
-  // prefer resolved backend url (for videos especially)
-  return meta?.url ?? (it.sourceType === "media" ? meta?.url ?? null : null);
-}
-
-
 function clearNoop(setSaveStatus: React.Dispatch<React.SetStateAction<SaveStatus>>) {
   setSaveStatus((s) => (s === "noop" ? "idle" : s));
 }
 
 /** ---------------- UI helpers ---------------- */
-
 function hashToInt(s: string) {
   let h = 2166136261;
   for (let i = 0; i < s.length; i++) {
@@ -267,38 +371,54 @@ function safeJsonParse(raw: string | null): any | null {
 }
 
 function cookieGet(name: string): string | undefined {
-  const m = document.cookie.match(new RegExp(`(?:^|; )${name.replace(/[-.$?*|{}()[\]\\/+^]/g, "\\$&")}=([^;]*)`));
+  const m = document.cookie.match(
+    new RegExp(`(?:^|; )${name.replace(/[-.$?*|{}()[\]\\/+^]/g, "\\$&")}=([^;]*)`)
+  );
   return m ? decodeURIComponent(m[1]) : undefined;
+}
+
+function userLabelFromAny(v: any): string | undefined {
+  if (!v) return undefined;
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    return (
+      (v as any).name ||
+      (v as any).fullName ||
+      (v as any).displayName ||
+      (v as any).username ||
+      (v as any).email ||
+      (v as any).user?.name ||
+      (v as any).user?.fullName ||
+      (v as any).user?.displayName ||
+      (v as any).user?.username ||
+      (v as any).user?.email
+    );
+  }
+  return undefined;
 }
 
 function deepFindUserLabel(obj: any, depth = 3): string | undefined {
   if (!obj || depth < 0) return undefined;
-
   const direct = userLabelFromAny(obj);
   if (direct) return direct;
-
   if (typeof obj !== "object") return undefined;
 
   const candidates = [obj.user, obj.profile, obj.account, obj.auth, obj.session, obj.me, obj.currentUser];
-
   for (const c of candidates) {
     const lbl = deepFindUserLabel(c, depth - 1);
     if (lbl) return lbl;
   }
-
   for (const k of Object.keys(obj)) {
     if (/(user|profile|account|auth|session|me|identity)/i.test(k)) {
       const lbl = deepFindUserLabel((obj as any)[k], depth - 1);
       if (lbl) return lbl;
     }
   }
-
   return undefined;
 }
 
 function readCurrentUserLabel(): string | undefined {
   const storages: Storage[] = [];
-
   if (typeof window !== "undefined") {
     try {
       storages.push(window.localStorage);
@@ -334,7 +454,6 @@ function readCurrentUserLabel(): string | undefined {
           if (root && typeof root === "object") {
             const lblRoot = deepFindUserLabel(root);
             if (lblRoot) return lblRoot;
-
             for (const sliceKey of Object.keys(root)) {
               const sliceRaw = (root as any)[sliceKey];
               const sliceObj = typeof sliceRaw === "string" ? safeJsonParse(sliceRaw) : sliceRaw;
@@ -348,14 +467,12 @@ function readCurrentUserLabel(): string | undefined {
         const obj = safeJsonParse(raw);
         const lbl = deepFindUserLabel(obj) || userLabelFromAny(obj);
         if (lbl) return lbl;
-
         if (typeof raw === "string" && raw.includes("@")) return raw;
       } catch {}
     }
   }
 
   const tokenKeys = ["access_token", "accessToken", "token", "authToken", "id_token", "idToken", "jwt"];
-
   for (const st of storages) {
     for (const tk of tokenKeys) {
       try {
@@ -363,19 +480,16 @@ function readCurrentUserLabel(): string | undefined {
         if (!jwt) continue;
         const parts = jwt.split(".");
         if (parts.length < 2) continue;
-
         const b64 = parts[1].replace(/-/g, "+").replace(/_/g, "/");
         const pad = "=".repeat((4 - (b64.length % 4)) % 4);
         const json = atob(b64 + pad);
         const payload = safeJsonParse(json);
-
         const label =
           (payload as any)?.name ||
           (payload as any)?.fullName ||
           (payload as any)?.preferred_username ||
           (payload as any)?.username ||
           (payload as any)?.email;
-
         if (label) return label;
       } catch {}
     }
@@ -395,34 +509,11 @@ function readCurrentUserLabel(): string | undefined {
     const lbl = deepFindUserLabel(g);
     if (lbl) return lbl;
   }
-
-  return undefined;
-}
-
-function userLabelFromAny(v: any): string | undefined {
-  if (!v) return undefined;
-  if (typeof v === "string") return v;
-
-  if (typeof v === "object") {
-    return (
-      (v as any).name ||
-      (v as any).fullName ||
-      (v as any).displayName ||
-      (v as any).username ||
-      (v as any).email ||
-      (v as any).user?.name ||
-      (v as any).user?.fullName ||
-      (v as any).user?.displayName ||
-      (v as any).user?.username ||
-      (v as any).user?.email
-    );
-  }
   return undefined;
 }
 
 function getUpdatedByLabel(ch: any): string | undefined {
   if (!ch) return undefined;
-
   return (
     userLabelFromAny(ch.updatedBy) ||
     userLabelFromAny(ch.updated_by) ||
@@ -506,18 +597,14 @@ function uiLayoutToApi(layoutId: string): string {
 function apiTransitionToUi(t?: ApiChannelTransition): ZoneTransition {
   const base = defaultTransition();
   if (!t) return base;
-
   const type = String(t.type ?? "").toLowerCase();
   const enabled = Boolean(t.enabled);
-
   if (!enabled) {
     return { ...base, enabled: false, type: "cut", durationSec: 0 };
   }
-
   if (type === "fade") {
     return { ...base, enabled: true, type: "fade", durationSec: Number(t.duration ?? 0.5), color: "#000000" };
   }
-
   return {
     ...base,
     enabled: true,
@@ -537,15 +624,12 @@ function uiTransitionToApi(t: ZoneTransition): ApiChannelTransition {
   if (!t.enabled || t.type === "cut") {
     return { enabled: false, type: "slide", duration: 0.5, direction: "right" };
   }
-
   if (t.type === "fade") {
     return { enabled: true, type: "fade", duration: Number(t.durationSec || 0.5) };
   }
-
   if (t.type === "zoom") {
     return { enabled: true, type: "fade", duration: Number(t.durationSec || 0.5) };
   }
-
   return {
     enabled: true,
     type: "slide",
@@ -555,11 +639,6 @@ function uiTransitionToApi(t: ZoneTransition): ApiChannelTransition {
 }
 
 /* ===================== ScreenCloud-like helpers ===================== */
-
-function pad2(n: number) {
-  return String(n).padStart(2, "0");
-}
-
 function formatHMS(totalSeconds: number) {
   const s = Math.max(0, Math.floor(totalSeconds || 0));
   const hh = Math.floor(s / 3600);
@@ -568,6 +647,7 @@ function formatHMS(totalSeconds: number) {
   if (hh > 0) return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
   return `${pad2(mm)}:${pad2(ss)}`;
 }
+
 function parseHMS(v: string): number | null {
   const s = v.trim();
   if (!s) return null;
@@ -578,7 +658,9 @@ function parseHMS(v: string): number | null {
   const parts = s.split(":").map((p) => p.trim());
   if (parts.some((p) => p === "" || !/^\d+$/.test(p))) return null;
 
-  let h = 0, m = 0, sec = 0;
+  let h = 0,
+    m = 0,
+    sec = 0;
   if (parts.length === 3) [h, m, sec] = parts.map(Number);
   else if (parts.length === 2) [m, sec] = parts.map(Number);
   else return null;
@@ -586,20 +668,32 @@ function parseHMS(v: string): number | null {
   return h * 3600 + m * 60 + sec;
 }
 
-
 function clampInt(n: number, min: number, max: number) {
   return Math.max(min, Math.min(max, n));
 }
 
 function normalizeTime(t: string) {
   // accept HH:mm or HH:mm:ss
-  const parts = t.split(":").map((x) => x.trim());
+  const parts = String(t ?? "").split(":").map((x) => x.trim());
   if (parts.length < 2) return "00:00:00";
   const hh = clampInt(Number(parts[0] || 0), 0, 23);
   const mm = clampInt(Number(parts[1] || 0), 0, 59);
   const ss = clampInt(Number(parts[2] || 0), 0, 59);
   return `${pad2(hh)}:${pad2(mm)}:${pad2(ss)}`;
 }
+
+const hhmm = (t: string) => {
+  const norm = normalizeTime(t);
+  return norm.slice(0, 5);
+};
+
+// ✅ clampEndToStart is applied ONLY when dateStart === dateEnd
+const normalizeTimeWindow = (tw: ScheduleTimeWindow, clampEndToStart: boolean): ScheduleTimeWindow => {
+  const s = normalizeTime(tw.startTime);
+  let e = normalizeTime(tw.endTime);
+  if (clampEndToStart && timeToSec(e) < timeToSec(s)) e = s;
+  return { ...tw, startTime: s, endTime: e };
+};
 
 function defaultSchedule(): ZoneItemSchedule {
   return {
@@ -617,15 +711,12 @@ function defaultSchedule(): ZoneItemSchedule {
 
 function scheduleBadgeLabel(s: ZoneItemSchedule) {
   if (s.dateOnlyEnabled) return "DATE";
-
   const days = s.weeklyDays ?? [];
   const isEveryday = s.mode === "everyday" || days.length === 7;
-
   if (isEveryday) return "EVERYDAY";
   if (days.length <= 2) return days.join(" ");
-  return `${days.length} DAYS`; // e.g. "5 DAYS"
+  return `${days.length} DAYS`;
 }
-
 
 function scheduleSubtitle(s: ZoneItemSchedule) {
   if (s.dateOnlyEnabled) {
@@ -637,39 +728,7 @@ function scheduleSubtitle(s: ZoneItemSchedule) {
   return `${label} · All day`;
 }
 
-
-/** Return schedules array with guaranteed >= 1 */
-function ensureSchedules(it: ZoneContentItem): ZoneItemSchedule[] {
-  const fromArray = Array.isArray(it.schedules) ? it.schedules.filter(Boolean) : [];
-  if (fromArray.length) return fromArray;
-
-  if (it.schedule) return [it.schedule];
-
-  return [defaultSchedule()];
-}
-
-const THUMB_BOX_W = 240;
-const THUMB_BOX_H = 140;
-
-function fitIntoBox(w: number, h: number, boxW = THUMB_BOX_W, boxH = THUMB_BOX_H) {
-  const r = w / h;
-  const boxR = boxW / boxH;
-
-  if (r >= boxR) {
-    // fit by width
-    const width = boxW;
-    const height = boxW / r;
-    return { width, height };
-  } else {
-    // fit by height
-    const height = boxH;
-    const width = boxH * r;
-    return { width, height };
-  }
-}
-
 /** ======================= Modals ======================= */
-
 function ChannelSizeModal({
   open,
   current,
@@ -688,7 +747,6 @@ function ChannelSizeModal({
   onConfirm: () => void;
 }) {
   if (!open) return null;
-
   const selectedKey = `${value.w}x${value.h}`;
   const hasPreset = presets.some((p) => `${p.w}x${p.h}` === selectedKey);
 
@@ -772,7 +830,6 @@ function ScheduleModal({
     const margin = 12;
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-
     const ax = anchorRect ? anchorRect.left : vw / 2;
     const ay = anchorRect ? anchorRect.top : vh / 2;
 
@@ -790,6 +847,29 @@ function ScheduleModal({
 
   const sch = schedule;
 
+  const todayYMD = (() => {
+    const d = new Date();
+    const yyyy = d.getFullYear();
+    const mm = pad2(d.getMonth() + 1);
+    const dd = pad2(d.getDate());
+    return `${yyyy}-${mm}-${dd}`;
+  })();
+
+  const clampYmdMin = (v: string | null, minYmd: string) => {
+    if (!v) return minYmd;
+    return v < minYmd ? minYmd : v;
+  };
+
+  const normalizeDateOnlyRange = (next: ZoneItemSchedule) => {
+    if (!next.dateOnlyEnabled) return next;
+
+    const s = clampYmdMin(next.dateStart ?? null, todayYMD);
+    let e = clampYmdMin(next.dateEnd ?? null, todayYMD);
+    if (e < s) e = s;
+
+    return { ...next, dateStart: s, dateEnd: e };
+  };
+
   const toggleDay = (d: Weekday) => {
     const set = new Set<Weekday>(sch.weeklyDays);
     if (set.has(d)) set.delete(d);
@@ -799,14 +879,12 @@ function ScheduleModal({
       ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"].includes(x)
     );
 
-    // keep at least one
     const safe: Weekday[] = next.length ? next : ["MON"];
-
     onChange({
       ...sch,
       weeklyDays: safe,
       mode: safe.length === 7 ? "everyday" : "weekly",
-      dateOnlyEnabled: false, // enforce mutual exclusivity
+      dateOnlyEnabled: false,
     });
   };
 
@@ -819,11 +897,7 @@ function ScheduleModal({
     });
 
   const addTimeWindow = () => {
-    const tw: ScheduleTimeWindow = {
-      id: crypto.randomUUID(),
-      startTime: "10:00:00",
-      endTime: "13:00:00",
-    };
+    const tw: ScheduleTimeWindow = { id: crypto.randomUUID(), startTime: "10:00:00", endTime: "13:00:00" };
     onChange({ ...sch, timeWindows: [...sch.timeWindows, tw] });
   };
 
@@ -832,32 +906,31 @@ function ScheduleModal({
   };
 
   const updateTimeWindow = (id: string, patch: Partial<ScheduleTimeWindow>) => {
+    const clampTime = Boolean(sch.dateOnlyEnabled && sch.dateStart && sch.dateEnd && sch.dateStart === sch.dateEnd);
+
     onChange({
       ...sch,
-      timeWindows: sch.timeWindows.map((x) => (x.id === id ? { ...x, ...patch } : x)),
+      timeWindows: sch.timeWindows.map((x) => {
+        if (x.id !== id) return x;
+        return normalizeTimeWindow({ ...x, ...patch }, clampTime);
+      }),
     });
   };
 
   const enableDateOnly = () => {
-    const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = pad2(today.getMonth() + 1);
-    const dd = pad2(today.getDate());
-    const d0 = `${yyyy}-${mm}-${dd}`;
-
-    onChange({
-      ...sch,
-      dateOnlyEnabled: true,
-      dateStart: sch.dateStart ?? d0,
-      dateEnd: sch.dateEnd ?? d0,
-    });
+    const d0 = todayYMD;
+    onChange(
+      normalizeDateOnlyRange({
+        ...sch,
+        dateOnlyEnabled: true,
+        dateStart: sch.dateStart ?? d0,
+        dateEnd: sch.dateEnd ?? d0,
+      })
+    );
   };
 
   const disableDateOnly = () => {
-    onChange({
-      ...sch,
-      dateOnlyEnabled: false,
-    });
+    onChange({ ...sch, dateOnlyEnabled: false, dateStart: null, dateEnd: null, timeWindows: [] });
   };
 
   const weeklySelected = sch.mode === "weekly" && sch.weeklyDays.length < 7;
@@ -869,25 +942,18 @@ function ScheduleModal({
         role="dialog"
         aria-modal="true"
         className="sm-modal"
-        style={{
-          left: pos.left,
-          top: pos.top,
-          width: pos.width,
-          height: pos.height,
-        }}
+        style={{ left: pos.left, top: pos.top, width: pos.width, height: pos.height }}
       >
         {/* Header */}
         <div className="sm-header">
           <div className="sm-title" title={itemName}>
             {itemName}
           </div>
-
           {onDelete && (
             <button type="button" onClick={onDelete} title="Delete schedule" className="sm-icon-btn">
               🗑
             </button>
           )}
-
           <button onClick={onClose} type="button" aria-label="Close" className="sm-close">
             ×
           </button>
@@ -902,7 +968,6 @@ function ScheduleModal({
           >
             Weekly
           </button>
-
           <button
             type="button"
             onClick={() => enableDateOnly()}
@@ -970,20 +1035,33 @@ function ScheduleModal({
           {sch.dateOnlyEnabled && (
             <>
               <div className="sm-section-title">Date range</div>
-
               <div className="sm-date-row">
                 <input
                   className="sm-input"
                   type="date"
+                  min={todayYMD}
                   value={sch.dateStart ?? ""}
-                  onChange={(e) => onChange({ ...sch, dateStart: e.target.value || null })}
+                  onChange={(e) => {
+                    const raw = e.target.value || null;
+                    const next = normalizeDateOnlyRange({
+                      ...sch,
+                      dateStart: raw,
+                      dateEnd: sch.dateEnd ?? raw,
+                    });
+                    onChange(next);
+                  }}
                 />
                 <div className="sm-sep">-</div>
                 <input
                   className="sm-input"
                   type="date"
+                  min={sch.dateStart ? clampYmdMin(sch.dateStart, todayYMD) : todayYMD}
                   value={sch.dateEnd ?? ""}
-                  onChange={(e) => onChange({ ...sch, dateEnd: e.target.value || null })}
+                  onChange={(e) => {
+                    const raw = e.target.value || null;
+                    const next = normalizeDateOnlyRange({ ...sch, dateEnd: raw });
+                    onChange(next);
+                  }}
                 />
               </div>
 
@@ -992,34 +1070,37 @@ function ScheduleModal({
               </button>
 
               <div className="sm-section-title">Play time</div>
-
-              {sch.timeWindows.map((tw) => (
-                <div key={tw.id} className="sm-time-row">
-                  <input
-                    className="sm-input"
-                    type="time"
-                    step={1}
-                    value={tw.startTime}
-                    onChange={(e) => updateTimeWindow(tw.id, { startTime: normalizeTime(e.target.value) })}
-                  />
-                  <div className="sm-sep">-</div>
-                  <input
-                    className="sm-input"
-                    type="time"
-                    step={1}
-                    value={tw.endTime}
-                    onChange={(e) => updateTimeWindow(tw.id, { endTime: normalizeTime(e.target.value) })}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeTimeWindow(tw.id)}
-                    title="Remove time window"
-                    className="sm-x"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
+              {sch.timeWindows.map((tw) => {
+                const startMinForEnd = hhmm(tw.startTime);
+                return (
+                  <div key={tw.id} className="sm-time-row">
+                    <input
+                      className="sm-input"
+                      type="time"
+                      step={1}
+                      value={tw.startTime}
+                      onChange={(e) => updateTimeWindow(tw.id, { startTime: normalizeTime(e.target.value) })}
+                    />
+                    <div className="sm-sep">-</div>
+                    <input
+                      className="sm-input"
+                      type="time"
+                      step={1}
+                      min={startMinForEnd}
+                      value={tw.endTime}
+                      onChange={(e) => updateTimeWindow(tw.id, { endTime: normalizeTime(e.target.value) })}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeTimeWindow(tw.id)}
+                      title="Remove time window"
+                      className="sm-x"
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
 
               {sch.timeWindows.length === 0 && (
                 <div className="sm-muted">No play time windows. Content will play all day for this date range.</div>
@@ -1032,7 +1113,6 @@ function ScheduleModal({
 
           <div className="sm-option">
             <div className={`sm-option-ic ${sch.playInFullScreen ? "is-on" : ""}`}>⛶</div>
-
             <div className="sm-option-text">
               <div className="sm-option-title">Play in Full Screen</div>
               <div className="sm-option-desc">
@@ -1040,7 +1120,6 @@ function ScheduleModal({
                 scheduled to play.
               </div>
             </div>
-
             <button
               type="button"
               onClick={() => onChange({ ...sch, playInFullScreen: !sch.playInFullScreen })}
@@ -1053,14 +1132,12 @@ function ScheduleModal({
 
           <div className="sm-option">
             <div className={`sm-option-ic sm-star ${sch.priority ? "is-on" : ""}`}>★</div>
-
             <div className="sm-option-text">
               <div className="sm-option-title">Set as Priority</div>
               <div className="sm-option-desc">
                 This content will override any other content scheduled for the same time period.
               </div>
             </div>
-
             <button
               type="button"
               onClick={() => onChange({ ...sch, priority: !sch.priority })}
@@ -1076,7 +1153,15 @@ function ScheduleModal({
   );
 }
 
-
+type MediaMeta = {
+  thumbnailUrl?: string | null; // for images: use url
+  durationSec?: number | null; // for video
+  mediaType?: "image" | "video";
+  name?: string;
+  url?: string | null;
+  mimeType?: string | null;
+  sizeBytes?: number | null;
+};
 
 function MediaPreviewModal({
   open,
@@ -1097,15 +1182,12 @@ function MediaPreviewModal({
   useShowingOutsideClick(modalRef, () => {
     if (open) onClose();
   });
-
   if (!open || !item) return null;
 
   const isVideo = item.sourceType === "media" && item.mediaType === "video";
   const isImage = item.sourceType === "media" && item.mediaType === "image";
-
   const mime = meta?.mimeType ?? null;
   const size = formatBytes(meta?.sizeBytes ?? null);
-
   const dur =
     isVideo && typeof meta?.durationSec === "number" && meta.durationSec > 0
       ? formatHMS(meta.durationSec)
@@ -1113,27 +1195,27 @@ function MediaPreviewModal({
       ? formatHMS(item.durationSec)
       : null;
 
-  // Preview URL: prefer real url; for images fallback to thumbnail
-  const previewUrl = meta?.url ?? (isImage ? meta?.thumbnailUrl ?? null : null) ?? null;
+  // ✅ Use item.url / item.thumbnailUrl / item.posterUrl fallbacks
+  const previewUrl =
+    meta?.url ??
+    (isImage ? item.url ?? item.thumbnailUrl ?? meta?.thumbnailUrl ?? null : item.url ?? null) ??
+    null;
 
-  // Download URL: prefer real url; fallback to thumbnail for images only
-  const downloadUrl = meta?.url ?? (isImage ? meta?.thumbnailUrl ?? null : null) ?? null;
+  const downloadUrl =
+    meta?.url ?? (isImage ? item.url ?? item.thumbnailUrl ?? null : item.url ?? null) ?? null;
 
   return (
     <div className="mp-backdrop" role="dialog" aria-modal="true">
       <div ref={modalRef} className="mp-modal">
-        {/* Header */}
         <div className="mp-header">
           <div className="mp-title" title={item.name}>
             {item.name}
           </div>
-
           <button onClick={onClose} type="button" aria-label="Close" className="mp-close">
             ×
           </button>
         </div>
 
-        {/* Body */}
         <div className="mp-body">
           <div className="mp-preview">
             {isVideo ? (
@@ -1151,23 +1233,19 @@ function MediaPreviewModal({
 
           <div className="mp-details">
             <div className="mp-details-title">DETAILS</div>
-
             <div className="mp-grid">
               <div className="mp-row">
                 <div className="mp-label">Type</div>
                 <div className="mp-value">{item.mediaType ?? item.sourceType}</div>
               </div>
-
               <div className="mp-row">
                 <div className="mp-label">Format (MIME)</div>
                 <div className="mp-value">{mime ?? "—"}</div>
               </div>
-
               <div className="mp-row">
                 <div className="mp-label">File size</div>
                 <div className="mp-value">{size}</div>
               </div>
-
               {isVideo && (
                 <div className="mp-row">
                   <div className="mp-label">Duration</div>
@@ -1178,12 +1256,10 @@ function MediaPreviewModal({
           </div>
         </div>
 
-        {/* Footer (3rd row) */}
         <div className="mp-footer">
           <button className="mp-btn mp-btn-danger" type="button" onClick={onDelete}>
             Delete
           </button>
-
           <button
             className="mp-btn mp-btn-secondary"
             type="button"
@@ -1200,9 +1276,8 @@ function MediaPreviewModal({
   );
 }
 
-
 /** ======================= Layout Preview ======================= */
-
+/** ✅ IMPORTANT: ONLY ONE LayoutThumb in this file (prevents TS2393). */
 function LayoutThumb({
   layout,
   width,
@@ -1224,78 +1299,79 @@ function LayoutThumb({
 }) {
   const [hoverId, setHoverId] = useState<string | null>(null);
 
-  const isLandscape = width >= height;
+  const ratio = width / height; // >1 landscape, <1 portrait
+  const LONG = 300;
+  const SHORT_MIN = 160;
+  const SHORT_MAX = 240;
 
-  /**
-   * Goal:
-   * - Portrait thumbs: keep your previous “tall” preview (looks good already)
-   * - Landscape thumbs: make them bigger by letting them use FULL available width
-   *   (so they don’t look like tiny strips)
-   */
-  const thumbStyle: React.CSSProperties = isLandscape
-    ? {
-        // ✅ Landscape: fill the card width, height is derived from aspect-ratio
-        width: "100%",
-        height: "auto",
-        aspectRatio: `${width} / ${height}`,
-        margin: "0 auto",
-        display: "block",
-      }
-    : {
-        // ✅ Portrait: keep a fixed visual height, center it
-        height: 300,
-        width: "auto",
-        maxWidth: "100%",
-        aspectRatio: `${width} / ${height}`,
-        margin: "0 auto",
-        display: "block",
-      };
+  let thumbW = LONG;
+  let thumbH = Math.round(LONG / ratio);
+
+  if (ratio < 1) {
+    thumbH = LONG;
+    thumbW = Math.round(LONG * ratio);
+  }
+
+  const shortSide = Math.min(Math.max(Math.min(thumbW, thumbH), SHORT_MIN), SHORT_MAX);
+  if (ratio >= 1) {
+    thumbH = shortSide;
+    thumbW = Math.round(thumbH * ratio);
+  } else {
+    thumbW = shortSide;
+    thumbH = Math.round(thumbW / ratio);
+  }
+
+  const thumbStyle: React.CSSProperties = {
+    width: thumbW,
+    height: thumbH,
+    position: "relative",
+  };
 
   return (
-    <div className="ce-layout-thumb" style={thumbStyle}>
-      {layout.zones.map((z, idx) => {
-        const isActive = activeZoneId === z.id;
-        const isHover = hoverId === z.id;
+    <div className="ce-layout-thumb-wrap" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+      <div className="ce-layout-thumb" style={thumbStyle}>
+        {layout.zones.map((z, idx) => {
+          const isActive = activeZoneId === z.id;
+          const isHover = hoverId === z.id;
 
-        return (
-          <div
-            key={z.id}
-            className={`ce-zone ${isActive ? "is-active" : ""} ${isHover ? "is-hover" : ""}`}
-            style={{
-              left: `${z.x}%`,
-              top: `${z.y}%`,
-              width: `${z.w}%`,
-              height: `${z.h}%`,
-            }}
-            onMouseEnter={(e) => {
-              setHoverId(z.id);
-              onZoneHoverId?.(z.id);
+          return (
+            <div
+              key={z.id}
+              className={`ce-zone ${isActive ? "is-active" : ""} ${isHover ? "is-hover" : ""}`}
+              style={{
+                position: "absolute",
+                left: `${z.x}%`,
+                top: `${z.y}%`,
+                width: `${z.w}%`,
+                height: `${z.h}%`,
+              }}
+              onMouseEnter={(e) => {
+                setHoverId(z.id);
+                onZoneHoverId?.(z.id);
 
-              const pxW = Math.round((z.w / 100) * width);
-              const pxH = Math.round((z.h / 100) * height);
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              onHover(`w:${pxW}\nh:${pxH}`, rect.left + rect.width / 2, rect.top);
-            }}
-            onMouseLeave={() => {
-              setHoverId(null);
-              onZoneHoverId?.(null);
-              onHover(null, 0, 0);
-            }}
-            onClick={(e) => {
-              e.stopPropagation();
-              onZoneSelectId?.(z.id);
-            }}
-          >
-            {showBadges && <div className="ce-zone-badge">{idx + 1}</div>}
-          </div>
-        );
-      })}
+                const pxW = Math.round((z.w / 100) * width);
+                const pxH = Math.round((z.h / 100) * height);
+                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                onHover(`w:${pxW}\nh:${pxH}`, rect.left + rect.width / 2, rect.top);
+              }}
+              onMouseLeave={() => {
+                setHoverId(null);
+                onZoneHoverId?.(null);
+                onHover(null, 0, 0);
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+                onZoneSelectId?.(z.id);
+              }}
+            >
+              {showBadges && <div className="ce-zone-badge">{idx + 1}</div>}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
-
-
-
 
 function ChooseLayoutModal({
   open,
@@ -1313,27 +1389,20 @@ function ChooseLayoutModal({
   height?: number;
   onClose: () => void;
   onSelect: (layoutId: string) => void;
-  
 }) {
   const w = width ?? 1920;
   const h = height ?? 1080;
 
-  const [tab, setTab] = useState<"all">("all");
+  const [tab] = useState<"all">("all");
   const [picked, setPicked] = useState(currentLayoutId);
-  const [hover, setHover] = useState<{ txt: string | null; x: number; y: number }>({
-    txt: null,
-    x: 0,
-    y: 0,
-  });
 
   useEffect(() => {
     if (open) setPicked(currentLayoutId);
-  }, [open, currentLayoutId, setPicked]);
+  }, [open, currentLayoutId]);
 
   if (!open) return null;
 
   const required: "landscape" | "portrait" = w >= h ? "landscape" : "portrait";
-
   const shown = (tab === "all" ? layouts : []).filter((l) => {
     const o = l.orientation ?? "any";
     return o === "any" || o === required;
@@ -1349,16 +1418,10 @@ function ChooseLayoutModal({
               ×
             </button>
           </div>
-
           <div className="clm-tabs">
-            <button
-              className={`clm-tab ${tab === "all" ? "is-active" : ""}`}
-              onClick={() => setTab("all")}
-              type="button"
-            >
+            <button className={`clm-tab ${tab === "all" ? "is-active" : ""}`} type="button">
               ALL LAYOUTS
             </button>
-           
           </div>
         </div>
 
@@ -1386,7 +1449,6 @@ function ChooseLayoutModal({
                     />
                   ))}
                 </div>
-
                 <div className="layout-name">{l.name}</div>
               </button>
             ))}
@@ -1394,37 +1456,16 @@ function ChooseLayoutModal({
         </div>
 
         <div className="clm-footer">
-          
           <button className="btn btn-primary" onClick={() => onSelect(picked)} type="button">
             Select
           </button>
         </div>
-
-        {hover.txt && (
-          <div className="ce-hover-tip" style={{ left: hover.x, top: hover.y }}>
-            {hover.txt.split("\n").map((line) => (
-              <div key={line}>{line}</div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
 }
 
 /* ======================= ChannelEditorPage ======================= */
-
-type MediaMeta = {
-  thumbnailUrl?: string | null;   // for images: use url
-  durationSec?: number | null;    // for video
-  mediaType?: "image" | "video";
-  name?: string;
-  url?: string | null;
-  mimeType?: string | null;
-  sizeBytes?: number | null;
-};
-
-
 export default function ChannelEditorPage() {
   const nav = useNavigate();
   const { id } = useParams<{ id: string }>();
@@ -1433,15 +1474,13 @@ export default function ChannelEditorPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [contentPickerOpen, setContentPickerOpen] = useState(false);
-  const [channel, setChannel] = useState<Channel | null>(null);
 
+  const [channel, setChannel] = useState<Channel | null>(null);
   const [layoutId, setLayoutId] = useState<string>("layout_main");
   const [width, setWidth] = useState<number>(1920);
   const [height, setHeight] = useState<number>(1080);
-
   const [activeZoneId, setActiveZoneId] = useState<string>("z1");
   const [hoverZoneId, setHoverZoneId] = useState<string | null>(null);
-
   const [panelTab, setPanelTab] = useState<"layout" | "settings">("layout");
   const [layoutModalOpen, setLayoutModalOpen] = useState(false);
 
@@ -1464,292 +1503,259 @@ export default function ChannelEditorPage() {
 
   // Save status / notifications
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const [hasChanges, setHasChanges] = useState(false);
-const [isSaving, setIsSaving] = useState(false);
-const [saveMsg, setSaveMsg] = useState<string | null>(null);
-
   const saveStatusTimerRef = useRef<number | null>(null);
   const lastSavedSnapshotRef = useRef<string>("");
 
   /* -------------------- ZONE CONTENT (state) -------------------- */
-
   const [zoneContents, setZoneContents] = useState<Record<string, ZoneContentItem[]>>({});
   const zoneContentsPrevRef = useRef<string>(""); // to detect changes
   const zonePatchTimersRef = useRef<Record<string, number>>({}); // debounce per zone
 
   // media meta cache (for thumbnails + video duration)
   const [mediaMeta, setMediaMeta] = useState<Record<string, MediaMeta>>({});
-
   type PlaylistMeta = { totalDurationSec?: number | null; itemCount?: number | null; name?: string };
+  const [playlistMeta, setPlaylistMeta] = useState<Record<string, PlaylistMeta>>({});
+  const playlistMetaReqInFlight = useRef<Set<string>>(new Set());
 
-const [playlistMeta, setPlaylistMeta] = useState<Record<string, PlaylistMeta>>({});
-const playlistMetaReqInFlight = useRef<Set<string>>(new Set());
+  // drag & drop (reorder)
+  const [dragItemId, setDragItemId] = useState<string | null>(null);
+  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+  const [durationDrafts, setDurationDrafts] = useState<Record<string, string>>({});
 
-// drag & drop (reorder)
-const [dragItemId, setDragItemId] = useState<string | null>(null);
-const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
+  function reorderItemsInZone(zoneId: string, fromItemId: string, toItemId: string) {
+    if (fromItemId === toItemId) return;
+    setZoneContents((prev) => {
+      const list = prev[zoneId] ?? [];
+      const ordered = list.slice().sort((a, b) => a.order - b.order);
+      const fromIndex = ordered.findIndex((x) => x.id === fromItemId);
+      const toIndex = ordered.findIndex((x) => x.id === toItemId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
 
-function reorderItemsInZone(zoneId: string, fromItemId: string, toItemId: string) {
-  if (fromItemId === toItemId) return;
+      const [moved] = ordered.splice(fromIndex, 1);
+      ordered.splice(toIndex, 0, moved);
 
-  setZoneContents((prev) => {
-    const list = prev[zoneId] ?? [];
-    // Work on a stable ordered list
-    const ordered = list.slice().sort((a, b) => a.order - b.order);
-
-    const fromIndex = ordered.findIndex((x) => x.id === fromItemId);
-    const toIndex = ordered.findIndex((x) => x.id === toItemId);
-    if (fromIndex < 0 || toIndex < 0) return prev;
-
-    const [moved] = ordered.splice(fromIndex, 1);
-    ordered.splice(toIndex, 0, moved);
-
-    // normalize order
-    const normalized = ordered.map((x, idx) => ({ ...x, order: idx }));
-    return { ...prev, [zoneId]: normalized };
-  });
-
-  clearNoop(setSaveStatus);
-  setHasChanges(true);
-  setSaveMsg(null);
-}
-
-function toNum(v: unknown): number | null {
-  if (typeof v === "number" && Number.isFinite(v)) return v;
-  if (typeof v === "string") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : null;
+      const normalized = ordered.map((x, idx) => ({ ...x, order: idx }));
+      return { ...prev, [zoneId]: normalized };
+    });
+    clearNoop(setSaveStatus);
   }
-  return null;
-}
 
-function toSecondsAutoAny(v: unknown): number | null {
-  const n = toNum(v);
-  if (n == null) return null;
-
-  // If it looks like milliseconds:
-  // - many APIs send ms in [1000..86,400,000]
-  // - also if divisible by 1000 it's very likely ms
-  if (n >= 1000 && (n % 1000 === 0 || n <= 86_400_000)) return Math.round(n / 1000);
-
-  // otherwise treat as seconds
-  return Math.round(n);
-}
-
-async function resolvePlaylistMeta(playlistId: string) {
-  if (!playlistId) return;
-  const cached = playlistMeta[playlistId]?.totalDurationSec;
-if (typeof cached === "number" && cached > 0) {
-  // If cached is absurdly large for seconds (or was ms mistakenly stored), allow refresh:
-  if (cached < 86_400) return; // keep cache if < 24h
-  // else continue and recompute
-}
-
-  if (playlistMetaReqInFlight.current.has(playlistId)) return;
-
-  playlistMetaReqInFlight.current.add(playlistId);
-  try {
-    const endpoints = [
-      `/api/playlists/${playlistId}`,
-      `/api/playlists/${playlistId}/items`,
-      `/api/library/playlists/${playlistId}`,
-      `/api/playlists?id=${encodeURIComponent(playlistId)}`,
-    ];
-
-    for (const url of endpoints) {
-      try {
-        const res = await fetch(url, { method: "GET" });
-        if (!res.ok) continue;
-        const data = await res.json().catch(() => null);
-        if (!data) continue;
-
-        const root = data.item ?? data;
-
-        // If backend already provides total duration
-        const directTotal =
-  toSecondsAutoAny(root.totalDurationSec) ??
-  toSecondsAutoAny(root.totalDurationMs) ??
-  toSecondsAutoAny(root.totalDuration);
-
-
-
-        // Try to extract items array and sum durations
-        const items: any[] =
-          (Array.isArray(root.items) ? root.items : null) ??
-          (Array.isArray(root.playlistItems) ? root.playlistItems : null) ??
-          (Array.isArray(root.data) ? root.data : null) ??
-          (Array.isArray(data.items) ? data.items : null) ??
-          (Array.isArray(data.data) ? data.data : null) ??
-          [];
-
-        let sum = 0;
-        let hasAny = false;
-        for (const it of items) {
-          const d =
-  toSecondsAutoAny(it.durationSec) ??
-  toSecondsAutoAny(it.durationMs) ??
-  toSecondsAutoAny(it.duration);
-
-
-          if (typeof d === "number" && d > 0) {
-            sum += d;
-            hasAny = true;
-          }
-        }
-
-        const total = typeof directTotal === "number" && directTotal > 0 ? directTotal : hasAny ? sum : null;
-        console.log("playlist meta raw", playlistId, { root, itemsLen: items.length, directTotal, sum });
-
-        setPlaylistMeta((prev) => ({
-          ...prev,
-          [playlistId]: {
-            totalDurationSec: total,
-            itemCount: items.length || null,
-            name: root.name ?? root.title ?? undefined,
-          },
-        }));
-        return;
-      } catch {
-        // try next endpoint
-      }
+  function toNum(v: unknown): number | null {
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    if (typeof v === "string") {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
     }
-  } finally {
-    playlistMetaReqInFlight.current.delete(playlistId);
+    return null;
   }
-}
 
+  function toSecondsAutoAny(v: unknown): number | null {
+    const n = toNum(v);
+    if (n == null) return null;
+    if (n >= 1000 && (n % 1000 === 0 || n <= 86_400_000)) return Math.round(n / 1000);
+    return Math.round(n);
+  }
+
+  async function resolvePlaylistMeta(playlistId: string) {
+    if (!playlistId) return;
+
+    const cached = playlistMeta[playlistId]?.totalDurationSec;
+    if (typeof cached === "number" && cached > 0) {
+      if (cached < 86_400) return;
+    }
+
+    if (playlistMetaReqInFlight.current.has(playlistId)) return;
+    playlistMetaReqInFlight.current.add(playlistId);
+
+    try {
+      const endpoints = [
+        `/api/playlists/${playlistId}`,
+        `/api/playlists/${playlistId}/items`,
+        `/api/library/playlists/${playlistId}`,
+        `/api/playlists?id=${encodeURIComponent(playlistId)}`,
+      ];
+
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, { method: "GET" });
+          if (!res.ok) continue;
+          const data = await res.json().catch(() => null);
+          if (!data) continue;
+
+          const root = data.item ?? data;
+          const directTotal =
+            toSecondsAutoAny(root.totalDurationSec) ?? toSecondsAutoAny(root.totalDurationMs) ?? toSecondsAutoAny(root.totalDuration);
+
+          const items: any[] =
+            (Array.isArray(root.items) ? root.items : null) ??
+            (Array.isArray(root.playlistItems) ? root.playlistItems : null) ??
+            (Array.isArray(root.data) ? root.data : null) ??
+            (Array.isArray(data.items) ? data.items : null) ??
+            (Array.isArray(data.data) ? data.data : null) ??
+            [];
+
+          let sum = 0;
+          let hasAny = false;
+          for (const it of items) {
+            const d = toSecondsAutoAny(it.durationSec) ?? toSecondsAutoAny(it.durationMs) ?? toSecondsAutoAny(it.duration);
+            if (typeof d === "number" && d > 0) {
+              sum += d;
+              hasAny = true;
+            }
+          }
+
+          const total = typeof directTotal === "number" && directTotal > 0 ? directTotal : hasAny ? sum : null;
+
+          setPlaylistMeta((prev) => ({
+            ...prev,
+            [playlistId]: { totalDurationSec: total, itemCount: items.length || null, name: root.name ?? root.title ?? undefined },
+          }));
+          return;
+        } catch {
+          // try next endpoint
+        }
+      }
+    } finally {
+      playlistMetaReqInFlight.current.delete(playlistId);
+    }
+  }
 
   const mediaMetaReqInFlight = useRef<Set<string>>(new Set());
 
-  // Schedule modal state (now edits a specific schedule row)
+  // Schedule modal state (edits a specific schedule row)
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleForItemId, setScheduleForItemId] = useState<string | null>(null);
   const [scheduleForScheduleId, setScheduleForScheduleId] = useState<string | null>(null);
   const [scheduleAnchorRect, setScheduleAnchorRect] = useState<DOMRect | null>(null);
 
-const mediaIndexRef = useRef<Record<string, any> | null>(null);
-const mediaIndexInFlightRef = useRef<Promise<void> | null>(null);
+  const mediaIndexRef = useRef<Record<string, any> | null>(null);
+  const mediaIndexInFlightRef = useRef<Promise<void> | null>(null);
 
-const [previewOpen, setPreviewOpen] = useState(false);
-const [previewItem, setPreviewItem] = useState<ZoneContentItem | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewItem, setPreviewItem] = useState<ZoneContentItem | null>(null);
 
-function openPreview(it: ZoneContentItem) {
-  setPreviewItem(it);
-  setPreviewOpen(true);
-
-  // ensure meta exists (especially for video url)
-  if (it.sourceType === "media") void resolveMediaMeta(it.sourceId);
-}
-
-function closePreview() {
-  setPreviewOpen(false);
-  setPreviewItem(null);
-}
-
-function downloadUrlToFile(url: string, filename: string) {
-  // works with cookies/session (same-origin). Adjust if you use Authorization headers.
-  fetch(url, { credentials: "include" })
-    .then((r) => {
-      if (!r.ok) throw new Error("Download failed");
-      return r.blob();
-    })
-    .then((blob) => {
-      const a = document.createElement("a");
-      const objectUrl = URL.createObjectURL(blob);
-      a.href = objectUrl;
-      a.download = filename || "download";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(objectUrl);
-    })
-    .catch(console.error);
-}
-
-async function ensureMediaIndex() {
-  if (mediaIndexRef.current) return;
-  if (mediaIndexInFlightRef.current) return mediaIndexInFlightRef.current;
-
-  mediaIndexInFlightRef.current = (async () => {
-    // Try the endpoint you already have in Network: /api/media?folderId=root
-    const res = await fetch(`/api/media?folderId=root`, { method: "GET" });
-    if (!res.ok) throw new Error(`media list failed: ${res.status}`);
-    const data = await res.json().catch(() => null);
-
-    // Accept a few shapes: {items:[]}, {data:[]}, []...
-    const items: any[] = Array.isArray(data)
-      ? data
-      : Array.isArray(data?.items)
-      ? data.items
-      : Array.isArray(data?.data)
-      ? data.data
-      : [];
-
-    const idx: Record<string, any> = {};
-    for (const it of items) {
-      const id = it.id ?? it._id;
-      if (!id) continue;
-      idx[String(id)] = it;
+  function openPreview(it: ZoneContentItem) {
+    setPreviewItem(it);
+    setPreviewOpen(true);
+    if (it.sourceType === "media") {
+     void resolveMediaMeta(it.sourceId);
     }
-    mediaIndexRef.current = idx;
-  })().finally(() => {
-    mediaIndexInFlightRef.current = null;
-  });
+  }
+  function closePreview() {
+    setPreviewOpen(false);
+    setPreviewItem(null);
+  }
 
-  return mediaIndexInFlightRef.current;
-}
+  function downloadUrlToFile(url: string, filename: string) {
+    fetch(url, { credentials: "include" })
+      .then((r) => {
+        if (!r.ok) throw new Error("Download failed");
+        return r.blob();
+      })
+      .then((blob) => {
+        const a = document.createElement("a");
+        const objectUrl = URL.createObjectURL(blob);
+        a.href = objectUrl;
+        a.download = filename || "download";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(objectUrl);
+      })
+      .catch(console.error);
+  }
 
-  // Debug (kept as console only)
-  useEffect(() => {
-    // eslint-disable-next-line no-console
-    console.log("Zone contents:", zoneContents);
-  }, [zoneContents]);
+  async function ensureMediaIndex() {
+    if (mediaIndexRef.current) return;
+    if (mediaIndexInFlightRef.current) return mediaIndexInFlightRef.current;
 
- async function resolveMediaMeta(sourceId: string) {
+    mediaIndexInFlightRef.current = (async () => {
+      const endpoints = [
+        `/api/media?folderId=root`,
+        `/api/media?folderId=root&recursive=true`,
+        `/api/media`, // many backends support listing all
+        `/api/library/media`,
+      ];
+
+      let items: any[] = [];
+
+      for (const url of endpoints) {
+        try {
+          const res = await fetch(url, { method: "GET" });
+          if (!res.ok) continue;
+          const data = await res.json().catch(() => null);
+          if (!data) continue;
+
+          const arr: any[] =
+            Array.isArray(data) ? data :
+            Array.isArray(data?.items) ? data.items :
+            Array.isArray(data?.data) ? data.data :
+            [];
+
+          if (arr.length) {
+            items = arr;
+            break;
+          }
+        } catch {
+          // try next
+        }
+      }
+
+      const idx: Record<string, any> = {};
+      for (const it of items) {
+        const id = it.id ?? it._id;
+        if (!id) continue;
+        idx[String(id)] = it;
+      }
+
+      mediaIndexRef.current = idx;
+    })().finally(() => {
+      mediaIndexInFlightRef.current = null;
+    });
+
+    return mediaIndexInFlightRef.current;
+  }
+
+  // ✅ Seedable resolve (fallback can be from ZoneContentItem)
+  async function resolveMediaMeta(sourceId: string) {
   if (!sourceId) return;
   if (mediaMeta[sourceId]) return;
   if (mediaMetaReqInFlight.current.has(sourceId)) return;
-
   mediaMetaReqInFlight.current.add(sourceId);
+
   try {
-    // 1) Use the real backend list endpoint
+    // ✅ First: load index once and resolve from list data (most reliable in your backend)
     try {
       await ensureMediaIndex();
       const row = mediaIndexRef.current?.[sourceId];
       if (row) {
-        const url =
-  row.url ?? row.fileUrl ?? row.downloadUrl ?? row.previewUrl ?? null;
+        const url = buildPublicMediaUrlFromItem(row);
+        const thumb = buildThumbUrlFromItem(row);
 
-const type =
-  row.type === "video" || row.mediaType === "video"
-    ? "video"
-    : row.type === "image" || row.mediaType === "image"
-    ? "image"
-    : undefined;
+        const type =
+          row.type === "video" || row.mediaType === "video"
+            ? "video"
+            : row.type === "image" || row.mediaType === "image"
+            ? "image"
+            : undefined;
 
-const thumb =
-  row.thumbnailUrl ??
-  row.thumbUrl ??
-  row.thumbnail ??
-  row.previewUrl ??
-  row.posterUrl ??
-  // ✅ IMPORTANT: fallback for images
-  (type === "image" ? url : null) ??
-  null;
-
-
-        
-  
-
+        const dur =
+          typeof row.durationSec === "number"
+            ? row.durationSec
+            : typeof row.duration === "number"
+            ? row.duration
+            : typeof row.durationMs === "number"
+            ? Math.round(row.durationMs / 1000)
+            : null;
 
         setMediaMeta((prev) => ({
           ...prev,
           [sourceId]: {
             thumbnailUrl: thumb,
-            durationSec: typeof row.durationSec === "number" ? row.durationSec : 10,
+            durationSec: dur ?? undefined,
             mediaType: type,
             name: row.name ?? row.title ?? undefined,
-            url,
+            url: url,
             mimeType: row.mimeType ?? row.mime ?? null,
             sizeBytes: typeof row.sizeBytes === "number" ? row.sizeBytes : null,
           },
@@ -1757,11 +1763,12 @@ const thumb =
         return;
       }
     } catch {
-      // ignore
+      // ignore and continue
     }
 
-    // 2) Old probes as fallback (optional)
-    const endpoints = [
+    // ✅ Second: try optional direct-by-id endpoints ONLY IF your backend supports them
+    // (in your case they 404, but we keep them as optional)
+    const directEndpoints = [
       `/api/media/${sourceId}`,
       `/api/library/media/${sourceId}`,
       `/api/assets/${sourceId}`,
@@ -1769,7 +1776,7 @@ const thumb =
       `/api/mediafile?id=${encodeURIComponent(sourceId)}`,
     ];
 
-    for (const url of endpoints) {
+    for (const url of directEndpoints) {
       try {
         const res = await fetch(url, { method: "GET" });
         if (!res.ok) continue;
@@ -1778,27 +1785,15 @@ const thumb =
 
         const item = parsed.item ?? parsed;
 
-const mediaUrl =
-  item.url ?? item.fileUrl ?? item.downloadUrl ?? item.previewUrl ?? null;
+        const mediaUrl = buildPublicMediaUrlFromItem(item);
+        const thumb = buildThumbUrlFromItem(item);
 
-const type =
-  item.type === "video" || item.mediaType === "video"
-    ? "video"
-    : item.type === "image" || item.mediaType === "image"
-    ? "image"
-    : undefined;
-
-const thumb =
-  item.thumbnailUrl ??
-  item.thumbUrl ??
-  item.thumbnail ??
-  item.previewUrl ??
-  item.posterUrl ??
-  // ✅ fallback for images
-  (type === "image" ? mediaUrl : null) ??
-  null;
-
-
+        const type =
+          item.type === "video" || item.mediaType === "video"
+            ? "video"
+            : item.type === "image" || item.mediaType === "image"
+            ? "image"
+            : undefined;
 
         const dur =
           typeof item.durationSec === "number"
@@ -1813,10 +1808,12 @@ const thumb =
           ...prev,
           [sourceId]: {
             thumbnailUrl: thumb,
-            durationSec: dur,
+            durationSec: dur ?? undefined,
             mediaType: type,
             name: item.name ?? item.title ?? undefined,
             url: mediaUrl,
+            mimeType: item.mimeType ?? item.mime ?? null,
+            sizeBytes: typeof item.sizeBytes === "number" ? item.sizeBytes : null,
           },
         }));
         return;
@@ -1824,31 +1821,39 @@ const thumb =
         // continue
       }
     }
+
+    // If we reach here: no meta could be resolved (avoid hammering)
+    setMediaMeta((prev) => ({
+      ...prev,
+      [sourceId]: { thumbnailUrl: null, url: null },
+    }));
   } finally {
     mediaMetaReqInFlight.current.delete(sourceId);
   }
 }
-function schedulesStorageKey(channelId: string) {
-  return `novasign:channel:${channelId}:schedules:v1`;
-}
-function loadScheduleOverrides(channelId: string): Record<string, any> {
-  try {
-    const raw = localStorage.getItem(schedulesStorageKey(channelId));
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
+
+
+  function schedulesStorageKey(channelId: string) {
+    return `novasign:channel:${channelId}:schedules:v1`;
   }
-}
-function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
-  try {
-    localStorage.setItem(schedulesStorageKey(channelId), JSON.stringify(obj));
-  } catch {
-    // ignore
+  function loadScheduleOverrides(channelId: string): Record<string, any> {
+    try {
+      const raw = localStorage.getItem(schedulesStorageKey(channelId));
+      return raw ? JSON.parse(raw) : {};
+    } catch {
+      return {};
+    }
   }
-}
+  function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
+    try {
+      localStorage.setItem(schedulesStorageKey(channelId), JSON.stringify(obj));
+    } catch {
+      // ignore
+    }
+  }
 
   function getItemSchedules(it: ZoneContentItem): ZoneItemSchedule[] {
-    return ensureSchedules(it);
+    return ensureSchedulesShared(it);
   }
 
   function setItemSchedules(zoneId: string, itemId: string, schedules: ZoneItemSchedule[]) {
@@ -1859,8 +1864,7 @@ function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
           ? {
               ...x,
               schedules,
-              // keep legacy schedule aligned with first row for backend compatibility
-              schedule: schedules[0],
+              schedule: schedules[0], // keep legacy aligned
             }
           : x
       );
@@ -1875,14 +1879,12 @@ function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
       const list = prev[zoneId] ?? [];
       const next = list.map((x) => {
         if (x.id !== itemId) return x;
-        const current = ensureSchedules(x);
+        const current = ensureSchedulesShared(x);
         const schedules = [...current, newSch];
         return { ...x, schedules, schedule: schedules[0] };
       });
       return { ...prev, [zoneId]: next };
     });
-    setHasChanges(true);
-    setSaveMsg(null);
     clearNoop(setSaveStatus);
   }
 
@@ -1891,8 +1893,8 @@ function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
       const list = prev[zoneId] ?? [];
       const next = list.map((x) => {
         if (x.id !== itemId) return x;
-        const current = ensureSchedules(x);
-        const schedules = current.filter((s) => s.id !== scheduleId);
+        const current = ensureSchedulesShared(x);
+        const schedules = current.filter((s: ZoneItemSchedule) => s.id !== scheduleId);
         const safe = schedules.length ? schedules : [defaultSchedule()];
         return { ...x, schedules: safe, schedule: safe[0] };
       });
@@ -1901,17 +1903,12 @@ function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
     clearNoop(setSaveStatus);
   }
 
-  // Open schedule modal for a specific schedule row
   function openScheduleModal(itemId: string, scheduleId: string, anchorEl: HTMLElement | null) {
     setScheduleForItemId(itemId);
     setScheduleForScheduleId(scheduleId);
     setScheduleAnchorRect(anchorEl ? anchorEl.getBoundingClientRect() : null);
     setScheduleOpen(true);
-    setHasChanges(true);
-setSaveMsg(null);
-
   }
-
   function closeScheduleModal() {
     setScheduleOpen(false);
     setScheduleForItemId(null);
@@ -1922,26 +1919,30 @@ setSaveMsg(null);
   async function patchZoneContent(zoneId: string, items: ZoneContentItem[]) {
     if (!id) return;
 
-    // what backend expects for each zone item (no client id)
-    // We attempt to send schedule/schedules + thumbnailUrl; if backend rejects, we strip and retry.
     const toApiFull = (it: ZoneContentItem) => {
-      const { id: _clientId, ...rest } = it;
+      // ✅ NEVER send UI-only fields to backend
+      const { id: _clientId, url: _u, posterUrl: _p, ...rest } = it;
 
       const schedules = Array.isArray(rest.schedules) ? rest.schedules : rest.schedule ? [rest.schedule] : undefined;
-
-      // keep BOTH for maximum compatibility (backend may accept either)
-      const apiObj: any = {
+      return {
         ...rest,
         schedule: schedules?.[0] ?? rest.schedule,
-        schedules: schedules,
-      };
-
-      return apiObj;
+        schedules,
+      } as any;
     };
 
     const toApiStripped = (it: ZoneContentItem) => {
-      const { id: _clientId, thumbnailUrl: _t, schedule: _s, schedules: _ss, ...rest } = it;
-      return rest;
+      // ✅ aggressively strip fields that backends often reject
+      const {
+        id: _clientId,
+        thumbnailUrl: _t,
+        schedule: _s,
+        schedules: _ss,
+        url: _u,
+        posterUrl: _p,
+        ...rest
+      } = it;
+      return rest as any;
     };
 
     const apiItemsFull = items.map(toApiFull);
@@ -1951,12 +1952,11 @@ setSaveMsg(null);
     const zoneUrl = `${API_BASE}/${id}/zones/${zoneId}/content`;
 
     const tryPatch = async (url: string, bodyObj: any) => {
-      const res = await fetch(url, {
+      return fetch(url, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(bodyObj),
       });
-      return res;
     };
 
     try {
@@ -1964,12 +1964,10 @@ setSaveMsg(null);
       if (res.ok) return;
 
       if (res.status === 400) {
-        // likely schema rejects extra keys; retry stripped
         res = await tryPatch(zoneUrl, { items: apiItemsStripped });
         if (res.ok) return;
       }
 
-      // If it's not 404, keep the error (real failure)
       if (res.status !== 404) {
         const txt = await res.text().catch(() => "");
         throw new Error(`Zone content PATCH failed: ${res.status} ${res.statusText} ${txt}`.trim());
@@ -1980,8 +1978,6 @@ setSaveMsg(null);
 
     // 2) Fallback: patch the channel itself with zones
     const channelUrl = `${API_BASE}/${id}`;
-
-    // Merge with current zones in state (if any)
     const currentZones = (channel as any)?.zones ?? {};
     const nextZonesFull = { ...currentZones, [zoneId]: apiItemsFull };
 
@@ -1992,14 +1988,12 @@ setSaveMsg(null);
     });
 
     if (!res2.ok && res2.status === 400) {
-      // retry stripped
       const nextZonesStripped = { ...currentZones, [zoneId]: apiItemsStripped };
       res2 = await fetch(channelUrl, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ zones: nextZonesStripped }),
       });
-
       if (res2.ok) {
         setChannel((prev: any) => (prev ? { ...prev, zones: nextZonesStripped } : prev));
         return;
@@ -2011,15 +2005,12 @@ setSaveMsg(null);
       throw new Error(`Channel PATCH (zones) failed: ${res2.status} ${res2.statusText} ${txt}`.trim());
     }
 
-    // Keep local channel state in sync
     setChannel((prev: any) => (prev ? { ...prev, zones: nextZonesFull } : prev));
   }
 
   function scheduleZonePatch(zoneId: string, items: ZoneContentItem[]) {
-    // debounce per zone (prevents rapid PATCH spam)
     const timers = zonePatchTimersRef.current;
     if (timers[zoneId]) window.clearTimeout(timers[zoneId]);
-
     timers[zoneId] = window.setTimeout(() => {
       void patchZoneContent(zoneId, items);
     }, 350);
@@ -2027,11 +2018,9 @@ setSaveMsg(null);
 
   useEffect(() => {
     if (!id) return;
-
     const snap = JSON.stringify(zoneContents);
     if (snap === zoneContentsPrevRef.current) return;
     zoneContentsPrevRef.current = snap;
-
     for (const [zoneId, items] of Object.entries(zoneContents)) {
       scheduleZonePatch(zoneId, items);
     }
@@ -2039,15 +2028,13 @@ setSaveMsg(null);
   }, [zoneContents, id]);
 
   /* -------------------- EXISTING LOGIC BELOW -------------------- */
-const effectiveOrientation: Orientation =
-  channel?.orientation ?? (height > width ? "portrait" : "landscape");
+  const effectiveOrientation: Orientation = channel?.orientation ?? (height > width ? "portrait" : "landscape");
 
+  const layoutsForOrientation = useMemo(() => {
+    return ALL_LAYOUTS.filter((l) => !l.orientation || l.orientation === "any" || l.orientation === effectiveOrientation);
+  }, [effectiveOrientation]);
 
-const layoutsForOrientation = useMemo(() => {
-  return ALL_LAYOUTS.filter(l => !l.orientation || l.orientation === "any" || l.orientation === effectiveOrientation);
-}, [effectiveOrientation]);
-
-  const layout = useMemo<LayoutDef>(() => ALL_LAYOUTS.find((l: LayoutDef) => l.id === layoutId) ?? ALL_LAYOUTS[0], [layoutId]);
+  const layout = useMemo<LayoutDef>(() => ALL_LAYOUTS.find((l) => l.id === layoutId) ?? ALL_LAYOUTS[0], [layoutId]);
 
   const zones = useMemo(() => {
     const base = layout.zones.map((z) => ({ ...z }));
@@ -2071,13 +2058,7 @@ const layoutsForOrientation = useMemo(() => {
   }, [layoutId]);
 
   const snapshot = useMemo(() => {
-    return JSON.stringify({
-      layoutId,
-      width,
-      height,
-      zoneTransitions,
-      zoneContents,
-    });
+    return JSON.stringify({ layoutId, width, height, zoneTransitions, zoneContents });
   }, [layoutId, width, height, zoneTransitions, zoneContents]);
 
   const isDirty = useMemo(() => snapshot !== lastSavedSnapshotRef.current, [snapshot]);
@@ -2086,150 +2067,169 @@ const layoutsForOrientation = useMemo(() => {
     if (saveStatus === "saved" || saveStatus === "noop" || saveStatus === "error") {
       if (saveStatusTimerRef.current) window.clearTimeout(saveStatusTimerRef.current);
       saveStatusTimerRef.current = window.setTimeout(() => setSaveStatus("idle"), 2500);
-      
     }
     return () => {
       if (saveStatusTimerRef.current) window.clearTimeout(saveStatusTimerRef.current);
     };
   }, [saveStatus]);
 
-  async function load() {
-    if (!id) return;
-    setLoading(true);
-    setError(null);
+ async function load() {
+  if (!id) return;
+  setLoading(true);
+  setError(null);
 
-    try {
-      const r = await fetchJsonStrict<{ item: Channel }>(`${API_BASE}/${id}`, { method: "GET" });
-      const ch = r.item;
-      // hydrate zoneContents from backend zones (so reload shows assignments)
-let hydrated: Record<string, ZoneContentItem[]> = {};
+  try {
+    const r = await fetchJsonStrict<{ item: Channel }>(`${API_BASE}/${id}`, { method: "GET" });
+    const ch = r.item;
 
-if (ch.zones && typeof ch.zones === "object") {
-  for (const [zoneId, list] of Object.entries(ch.zones as any)) {
-    hydrated[zoneId] = (Array.isArray(list) ? list : []).map((it: any, idx: number) => {
-      const schedulesFromApi: ZoneItemSchedule[] = Array.isArray(it.schedules)
-        ? it.schedules.map((s: any) => ({
-            ...s,
-            id: s?.id ?? crypto.randomUUID(),
-            weeklyDays: Array.isArray(s?.weeklyDays) ? s.weeklyDays : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
-            timeWindows: Array.isArray(s?.timeWindows) ? s.timeWindows : [],
-          }))
-        : it.schedule
-        ? [
-            {
-              ...it.schedule,
-              id: it.schedule?.id ?? crypto.randomUUID(),
-              weeklyDays: Array.isArray(it.schedule?.weeklyDays)
-                ? it.schedule.weeklyDays
-                : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
-              timeWindows: Array.isArray(it.schedule?.timeWindows) ? it.schedule.timeWindows : [],
-            },
-          ]
-        : [defaultSchedule()];
+    // hydrate zoneContents from backend zones (so reload shows assignments)
+    let hydrated: Record<string, ZoneContentItem[]> = {};
 
-      return {
-        id: crypto.randomUUID(),
-        sourceType: it.sourceType,
-        sourceId: it.sourceId,
-        name: it.name ?? "(untitled)",
-        mediaType: it.mediaType,
-        durationSec: typeof it.durationSec === "number" ? it.durationSec : 10,
-        order: typeof it.order === "number" ? it.order : idx,
-        startAt: it.startAt ?? null,
-        endAt: it.endAt ?? null,
-        thumbnailUrl: it.thumbnailUrl ?? null,
-        schedules: schedulesFromApi,
-        schedule: schedulesFromApi[0],
-      } as ZoneContentItem;
-    });
-  }
+    if (ch.zones && typeof ch.zones === "object") {
+      for (const [zoneId, list] of Object.entries(ch.zones as any)) {
+        hydrated[zoneId] = (Array.isArray(list) ? list : []).map((it: any, idx: number) => {
+          const schedulesFromApi: ZoneItemSchedule[] = Array.isArray(it.schedules)
+            ? it.schedules.map((s: any) => ({
+                ...s,
+                id: s?.id ?? crypto.randomUUID(),
+                weeklyDays: Array.isArray(s?.weeklyDays)
+                  ? s.weeklyDays
+                  : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+                timeWindows: Array.isArray(s?.timeWindows) ? s.timeWindows : [],
+              }))
+            : it.schedule
+            ? [
+                {
+                  ...it.schedule,
+                  id: it.schedule?.id ?? crypto.randomUUID(),
+                  weeklyDays: Array.isArray(it.schedule?.weeklyDays)
+                    ? it.schedule.weeklyDays
+                    : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+                  timeWindows: Array.isArray(it.schedule?.timeWindows) ? it.schedule.timeWindows : [],
+                },
+              ]
+            : [defaultSchedule()];
 
-  // ✅ your overrides block can stay here (it uses hydrated)
-  if (id) {
+          // ✅ derive URLs from backend item (NO undefined vars)
+          const mediaUrl: string | null =
+            it.url ??
+            it.fileUrl ??
+            it.downloadUrl ??
+            it.previewUrl ??
+            it.publicUrl ??
+            it.path ??
+            null;
+
+          const thumb: string | null =
+            it.thumbnailUrl ??
+            it.thumbUrl ??
+            it.thumbnail ??
+            it.previewUrl ?? // sometimes previewUrl is an image thumb
+            it.posterUrl ??
+            // if it's an image, fallback to the file itself
+            (it.sourceType === "media" && it.mediaType === "image" ? mediaUrl : null) ??
+            null;
+
+          return {
+            id: crypto.randomUUID(),
+            sourceType: it.sourceType,
+            sourceId: it.sourceId,
+            name: it.name ?? "(untitled)",
+            mediaType: it.mediaType,
+            durationSec: typeof it.durationSec === "number" ? it.durationSec : 10,
+            order: typeof it.order === "number" ? it.order : idx,
+            startAt: it.startAt ?? null,
+            endAt: it.endAt ?? null,
+
+            // ✅ keep both: thumbnailUrl + url/posterUrl for UI preview/fallbacks
+            thumbnailUrl: thumb,
+            url: mediaUrl,
+            posterUrl: it.posterUrl ?? null,
+
+            schedules: schedulesFromApi,
+            schedule: schedulesFromApi[0],
+          } as ZoneContentItem;
+        });
+      }
+    }
+
+    // local overrides
     const overrides = loadScheduleOverrides(id);
     for (const [zoneId, list] of Object.entries(hydrated)) {
       hydrated[zoneId] = (list as any[]).map((it) => {
         const key = `${zoneId}:${it.sourceType}:${it.sourceId}`;
         const ov = overrides[key];
         if (!ov) return it;
-
         const schedules = Array.isArray(ov.schedules) ? ov.schedules : null;
         return schedules ? { ...it, schedules, schedule: schedules[0] } : it;
       });
     }
-  }
 
-  setZoneContents({ ...hydrated });
+    setZoneContents({ ...hydrated });
 
-  // resolve media metadata
-  for (const items of Object.values(hydrated)) {
-    for (const it of items) {
-      if (it.sourceType === "media") void resolveMediaMeta(it.sourceId);
+    // resolve media metadata
+    for (const items of Object.values(hydrated)) {
+      for (const it of items) {
+        if (it.sourceType === "media") {
+          void resolveMediaMeta(it.sourceId);
+        }
+        if (it.sourceType === "playlist") void resolvePlaylistMeta(it.sourceId);
+      }
     }
+
+    const fallbackBy = readCurrentUserLabel();
+    setChannel({ ...ch, updatedBy: getUpdatedByLabel(ch) || fallbackBy || (ch as any).updatedBy } as any);
+
+    const uiLayoutId = apiLayoutToUi(ch.layoutId);
+    const initialLayout = ALL_LAYOUTS.find((l) => l.id === uiLayoutId) ?? ALL_LAYOUTS[0];
+
+    const fallbackDim = ch.orientation === "portrait" ? { w: 1080, h: 1920 } : { w: 1920, h: 1080 };
+    const initialWidth = typeof ch.width === "number" && ch.width > 0 ? ch.width : fallbackDim.w;
+    const initialHeight = typeof ch.height === "number" && ch.height > 0 ? ch.height : fallbackDim.h;
+
+    setLayoutId(uiLayoutId);
+    setWidth(initialWidth);
+    setHeight(initialHeight);
+
+    const nextTransitions: Record<string, ZoneTransition> = {
+      z1: apiTransitionToUi(ch.transition),
+      background_audio: defaultTransition(),
+    };
+
+    for (const z of [...initialLayout.zones.map((z) => z.id), "background_audio"]) {
+      if (!nextTransitions[z]) nextTransitions[z] = defaultTransition();
+    }
+
+    setZoneTransitions(nextTransitions);
+    setActiveZoneId(initialLayout.zones[0]?.id ?? "z1");
+
+    lastSavedSnapshotRef.current = JSON.stringify({
+      layoutId: uiLayoutId,
+      width: initialWidth,
+      height: initialHeight,
+      zoneTransitions: nextTransitions,
+      zoneContents: hydrated,
+    });
+  } catch (e: any) {
+    setError(`Failed to load channel. ${humanizeError(e)}`.trim());
+  } finally {
+    setLoading(false);
   }
 }
 
 
-      const fallbackBy = readCurrentUserLabel();
-      setChannel({
-        ...ch,
-        updatedBy: getUpdatedByLabel(ch) || fallbackBy || (ch as any).updatedBy,
-      } as any);
-
-      const uiLayoutId = apiLayoutToUi(ch.layoutId);
-      const initialLayout = ALL_LAYOUTS.find((l) => l.id === uiLayoutId) ?? ALL_LAYOUTS[0];
-
-      const fallbackDim =
-  ch.orientation === "portrait"
-    ? { w: 1080, h: 1920 }
-    : { w: 1920, h: 1080 };
-
-const initialWidth = typeof ch.width === "number" && ch.width > 0 ? ch.width : fallbackDim.w;
-const initialHeight = typeof ch.height === "number" && ch.height > 0 ? ch.height : fallbackDim.h;
-
-
-      setLayoutId(uiLayoutId);
-      setWidth(initialWidth);
-      setHeight(initialHeight);
-
-      const nextTransitions: Record<string, ZoneTransition> = {
-        z1: apiTransitionToUi(ch.transition),
-        background_audio: defaultTransition(),
-      };
-
-      for (const z of [...initialLayout.zones.map((z) => z.id), "background_audio"]) {
-        if (!nextTransitions[z]) nextTransitions[z] = defaultTransition();
+  useEffect(() => {
+    if (!id) return;
+    const overrides: Record<string, any> = {};
+    for (const [zoneId, items] of Object.entries(zoneContents)) {
+      for (const it of items) {
+        const key = `${zoneId}:${it.sourceType}:${it.sourceId}`;
+        const schedules = ensureSchedulesShared(it);
+        overrides[key] = { schedules };
       }
-      setZoneTransitions(nextTransitions);
-
-      setActiveZoneId(initialLayout.zones[0]?.id ?? "z1");
-
-      lastSavedSnapshotRef.current = JSON.stringify({
-        layoutId: uiLayoutId,
-        width: initialWidth,
-        height: initialHeight,
-        zoneTransitions: nextTransitions,
-        zoneContents: hydrated,
-      });
-    } catch (e: any) {
-      setError(`Failed to load channel. ${humanizeError(e)}`.trim());
-    } finally {
-      setLoading(false);
     }
-  }
-useEffect(() => {
-  if (!id) return;
-
-  const overrides: Record<string, any> = {};
-  for (const [zoneId, items] of Object.entries(zoneContents)) {
-    for (const it of items) {
-      const key = `${zoneId}:${it.sourceType}:${it.sourceId}`;
-      const schedules = ensureSchedules(it);
-      overrides[key] = { schedules };
-    }
-  }
-  saveScheduleOverrides(id, overrides);
-}, [zoneContents, id]);
+    saveScheduleOverrides(id, overrides);
+  }, [zoneContents, id]);
 
   useEffect(() => {
     void load();
@@ -2255,14 +2255,8 @@ useEffect(() => {
 
   async function onSave() {
     if (!id) return;
-    const snapshot = JSON.stringify({
-      layoutId,
-      width,
-      height,
-      zoneTransitions,
-      zoneContents,
-    });
 
+    const snap = JSON.stringify({ layoutId, width, height, zoneTransitions, zoneContents });
     if (!isDirty) {
       setSaveStatus("noop");
       return;
@@ -2282,30 +2276,19 @@ useEffect(() => {
 
     try {
       try {
-        const res = await fetchJsonStrict<{ item: Channel }>(url, {
-          method: "PATCH",
-          body: JSON.stringify(apiPayload),
-        });
-
+        const res = await fetchJsonStrict<{ item: Channel }>(url, { method: "PATCH", body: JSON.stringify(apiPayload) });
         const fallbackBy = readCurrentUserLabel();
-        setChannel({
-          ...res.item,
-          updatedBy: getUpdatedByLabel(res.item) || fallbackBy || res.item.updatedBy,
-        } as any);
+        setChannel({ ...res.item, updatedBy: getUpdatedByLabel(res.item) || fallbackBy || res.item.updatedBy } as any);
       } catch (e: any) {
         if (e?.status === 404 || e?.status === 405 || String(e?.message ?? "").toLowerCase().includes("patch")) {
-          const res2 = await fetchJsonStrict<{ item: Channel }>(url, {
-            method: "PUT",
-            body: JSON.stringify(apiPayload),
-          });
+          const res2 = await fetchJsonStrict<{ item: Channel }>(url, { method: "PUT", body: JSON.stringify(apiPayload) });
           setChannel(res2.item);
         } else {
           throw e;
         }
       }
 
-      // ✅ Update baseline AND clear dirty
-    lastSavedSnapshotRef.current = snapshot;
+      lastSavedSnapshotRef.current = snap;
       setSaveStatus("saved");
     } catch (e: any) {
       setSaveStatus("error");
@@ -2333,18 +2316,17 @@ useEffect(() => {
 
   const hasAnyContent = Object.values(zoneContents).some((arr) => (arr?.length ?? 0) > 0);
 
-  const byLabel = useMemo(() => {
-    return getUpdatedByLabel(channel) || readCurrentUserLabel() || undefined;
-  }, [channel]);
+  const byLabel = useMemo(() => getUpdatedByLabel(channel) || readCurrentUserLabel() || undefined, [channel]);
 
   const updatedLabel = channel?.updatedAt
     ? ` · Updated ${formatUpdated(channel.updatedAt)}${byLabel ? ` · By ${byLabel}` : ""}`
     : "";
 
-  // keep media meta synchronized: whenever active zone items change, resolve missing media meta
   useEffect(() => {
     for (const it of activeZoneItems) {
-      if (it.sourceType === "media") void resolveMediaMeta(it.sourceId);
+      if (it.sourceType === "media") {
+        void resolveMediaMeta(it.sourceId);
+      }
       if (it.sourceType === "playlist") void resolvePlaylistMeta(it.sourceId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2352,7 +2334,18 @@ useEffect(() => {
 
   function getItemThumb(it: ZoneContentItem) {
     if (it.thumbnailUrl) return it.thumbnailUrl;
-    if (it.sourceType === "media") return mediaMeta[it.sourceId]?.thumbnailUrl ?? null;
+
+    if (it.sourceType === "media") {
+      const m = mediaMeta[it.sourceId];
+      if (m?.thumbnailUrl) return m.thumbnailUrl;
+
+      // ✅ image: fallback to direct url
+      if (it.mediaType === "image" && it.url) return it.url;
+
+      // ✅ video: fallback to posterUrl
+      if (it.mediaType === "video" && it.posterUrl) return it.posterUrl;
+    }
+
     return null;
   }
 
@@ -2364,15 +2357,15 @@ useEffect(() => {
     }
     return it.durationSec;
   }
-function getDisplayDurationSec(it: ZoneContentItem): number {
-  if (it.sourceType === "playlist") {
-    const raw = playlistMeta[it.sourceId]?.totalDurationSec ?? it.durationSec;
-    // normalize possible ms/seconds
-    const v = toSecondsAutoAny(raw);
-    return v ?? 0;
+
+  function getDisplayDurationSec(it: ZoneContentItem): number {
+    if (it.sourceType === "playlist") {
+      const raw = playlistMeta[it.sourceId]?.totalDurationSec ?? it.durationSec;
+      const v = toSecondsAutoAny(raw);
+      return v ?? 0;
+    }
+    return getEffectiveDuration(it);
   }
-  return getEffectiveDuration(it);
-}
 
   function updateItemInZone(zoneId: string, itemId: string, patch: Partial<ZoneContentItem>) {
     setZoneContents((prev) => {
@@ -2381,24 +2374,19 @@ function getDisplayDurationSec(it: ZoneContentItem): number {
       return { ...prev, [zoneId]: next };
     });
     clearNoop(setSaveStatus);
-  setHasChanges(true);
-  setSaveMsg(null);
-
   }
 
   function deleteItemFromZone(zoneId: string, itemId: string) {
     setZoneContents((prev) => {
       const list = (prev[zoneId] ?? []).filter((x) => x.id !== itemId);
-      // re-order
       const normalized = list.map((x, idx) => ({ ...x, order: idx }));
       return { ...prev, [zoneId]: normalized };
     });
   }
 
-  // Helpers for editing a specific schedule row
   function getScheduleRow(it: ZoneContentItem, scheduleId: string): ZoneItemSchedule {
-    const list = ensureSchedules(it);
-    return list.find((s) => s.id === scheduleId) ?? list[0];
+    const list = ensureSchedulesShared(it);
+    return list.find((s: ZoneItemSchedule) => s.id === scheduleId) ?? list[0];
   }
 
   function updateScheduleRow(zoneId: string, itemId: string, scheduleId: string, nextSchedule: ZoneItemSchedule) {
@@ -2406,11 +2394,13 @@ function getDisplayDurationSec(it: ZoneContentItem): number {
     const item = items.find((x) => x.id === itemId);
     if (!item) return;
 
-    const schedules = ensureSchedules(item).map((s) => (s.id === scheduleId ? nextSchedule : s));
+    const schedules = ensureSchedulesShared(item).map((s: ZoneItemSchedule) =>
+      s.id === scheduleId ? nextSchedule : s
+    );
+
     setItemSchedules(zoneId, itemId, schedules);
   }
 
-  // Schedule modal derived refs
   const scheduleModalItem = useMemo(() => {
     if (!scheduleForItemId) return null;
     return activeZoneItems.find((x) => x.id === scheduleForItemId) ?? null;
@@ -2445,15 +2435,12 @@ function getDisplayDurationSec(it: ZoneContentItem): number {
               {saveStatusText}
             </div>
           )}
-
           <button className="btn btn-ghost" onClick={onSave} disabled={saveStatus === "saving"} type="button">
             Save
           </button>
-
           <button className="btn btn-ghost" onClick={() => {}} type="button">
             Preview
           </button>
-
           <button className="btn btn-primary" onClick={() => {}} type="button">
             Publish
           </button>
@@ -2462,7 +2449,6 @@ function getDisplayDurationSec(it: ZoneContentItem): number {
             <button className="btn btn-ghost" aria-label="More" onClick={() => setMoreOpen((v) => !v)} type="button">
               …
             </button>
-
             {moreOpen && (
               <div className="ce-menu">
                 <button className="ce-menu-item" onClick={() => setMoreOpen(false)} type="button">
@@ -2493,7 +2479,6 @@ function getDisplayDurationSec(it: ZoneContentItem): number {
                   <option value="background_audio">Background Audio</option>
                 </select>
               </div>
-
               <div className="ce-select">
                 <select value={"fill"} onChange={() => {}}>
                   <option value="fill">Fill Zone</option>
@@ -2526,122 +2511,143 @@ function getDisplayDurationSec(it: ZoneContentItem): number {
                   <div className="ce-zoneList-empty">No items in this zone.</div>
                 ) : (
                   activeZoneItems.map((it, idx) => {
-                    const thumb = getItemThumb(it);
-                    const rawPlaylistDur = playlistMeta[it.sourceId]?.totalDurationSec ?? it.durationSec;
-const dur = getDisplayDurationSec(it);
+                  const thumb =
+  it.thumbnailUrl ??
+  (it.sourceType === "media" ? mediaMeta[it.sourceId]?.thumbnailUrl ?? null : null);
 
+const url =
+  it.url ??
+  (it.sourceType === "media" ? mediaMeta[it.sourceId]?.url ?? null : null);
 
+                    const dur = getDisplayDurationSec(it);
                     const isPlaylist = it.sourceType === "playlist";
                     const isVideo = it.sourceType === "media" && it.mediaType === "video";
                     const isImage = it.sourceType === "media" && it.mediaType === "image";
                     const meta = it.sourceType === "media" ? mediaMeta[it.sourceId] : undefined;
-                    const mediaUrl = meta?.url ?? null;
+
+                    // ✅ url fallback chain
+                    const mediaUrl = meta?.url ?? it.url ?? null;
+
                     const schedules = getItemSchedules(it);
+                    const draftKey = `${activeZoneId}:${it.id}`;
+                    const shownValue = durationDrafts[draftKey] ?? formatHMS(dur);
 
                     return (
                       <div
-  key={it.id}
-  className={`ce-zoneRow ${idx === activeZoneItems.length - 1 ? "is-last" : ""} ${
-    dragOverItemId === it.id ? "is-dragover" : ""
-  }`}
-  onDragOver={(e) => {
-    // required to allow drop
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-  }}
-  onDragEnter={(e) => {
-    e.preventDefault();
-    if (dragItemId && dragItemId !== it.id) setDragOverItemId(it.id);
-  }}
-  onDragLeave={() => {
-    if (dragOverItemId === it.id) setDragOverItemId(null);
-  }}
-  onDrop={(e) => {
-    e.preventDefault();
-    const dragged = e.dataTransfer.getData("text/plain") || dragItemId;
-    if (!dragged) return;
-    if (dragged === it.id) return;
-
-    reorderItemsInZone(activeZoneId, dragged, it.id);
-    setDragItemId(null);
-    setDragOverItemId(null);
-  }}
->
-
+                        key={it.id}
+                        className={`ce-zoneRow ${idx === activeZoneItems.length - 1 ? "is-last" : ""} ${
+                          dragOverItemId === it.id ? "is-dragover" : ""
+                        }`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = "move";
+                        }}
+                        onDragEnter={(e) => {
+                          e.preventDefault();
+                          if (dragItemId && dragItemId !== it.id) setDragOverItemId(it.id);
+                        }}
+                        onDragLeave={() => {
+                          if (dragOverItemId === it.id) setDragOverItemId(null);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          const dragged = e.dataTransfer.getData("text/plain") || dragItemId;
+                          if (!dragged) return;
+                          if (dragged === it.id) return;
+                          reorderItemsInZone(activeZoneId, dragged, it.id);
+                          setDragItemId(null);
+                          setDragOverItemId(null);
+                        }}
+                      >
                         {/* Thumbnail */}
-                        <button type="button" onClick={() => openPreview(it)} className="ce-zoneThumbBtn" title="Preview">
-                          {thumb ? (
-                            <img
-                              src={thumb}
-                              alt=""
-                              loading="lazy"
-                              decoding="async"
-                              className="ce-zoneThumbMedia"
-                              onError={(e) => {
-                                const img = e.currentTarget as HTMLImageElement;
-                                if (isImage && mediaUrl && img.src !== mediaUrl) {
-                                  img.src = mediaUrl;
-                                  return;
-                                }
-                                img.style.display = "none";
-                              }}
-                            />
-                          ) : isVideo && mediaUrl ? (
-                            <video
-                              src={mediaUrl}
-                              muted
-                              preload="metadata"
-                              className="ce-zoneThumbMedia"
-                              onLoadedMetadata={(e) => {
-                                const d = Math.round((e.currentTarget as HTMLVideoElement).duration || 0);
-                                if (d > 0) {
-                                  setMediaMeta((prev) => ({
-                                    ...prev,
-                                    [it.sourceId]: {
-                                      ...(prev[it.sourceId] ?? {}),
-                                      durationSec: d,
-                                      mediaType: "video",
-                                      url: mediaUrl,
-                                    },
-                                  }));
-                                }
-                              }}
-                            />
-                          ) : it.sourceType === "playlist" ? (
-                            <div className="ce-zoneThumbFallback">
-                              <img
-                                src="/assets/icons/playlist.svg"
-                                alt="Playlist"
-                                className="ce-zoneThumbPlaylistIcon"
-                                draggable={false}
-                              />
-                            </div>
-                          ) : (
-                            <div className="ce-zoneThumbText">{it.mediaType?.toUpperCase() ?? "MEDIA"}</div>
-                          )}
-                        </button>
+                        {/* Thumbnail */}
+<button type="button" onClick={() => openPreview(it)} className="ce-zoneThumbBtn" title="Preview">
+  {isVideo && mediaUrl ? (
+    <video
+      src={mediaUrl}
+      muted
+      playsInline
+      preload="metadata"
+      className="ce-zoneThumbMedia"
+      onLoadedData={(e) => {
+        // show a real frame (avoid black frame / nothing)
+        const v = e.currentTarget as HTMLVideoElement;
+        try {
+          v.currentTime = 0.1;
+        } catch {}
+      }}
+      onLoadedMetadata={(e) => {
+        const d = Math.round((e.currentTarget as HTMLVideoElement).duration || 0);
+        if (d > 0) {
+          setMediaMeta((prev) => ({
+            ...prev,
+            [it.sourceId]: {
+              ...(prev[it.sourceId] ?? {}),
+              durationSec: d,
+              mediaType: "video",
+              url: mediaUrl,
+            },
+          }));
+        }
+      }}
+    />
+  ) : thumb ? (
+    <img
+      src={thumb}
+      alt=""
+      loading="lazy"
+      decoding="async"
+      className="ce-zoneThumbMedia"
+      onError={(e) => {
+        const img = e.currentTarget as HTMLImageElement;
+
+        // if image thumb failed, try the real file url
+        if (isImage && mediaUrl && img.src !== mediaUrl) {
+          img.src = mediaUrl;
+          return;
+        }
+
+        img.style.display = "none";
+      }}
+    />
+  ) : it.sourceType === "playlist" ? (
+    <div className="ce-zoneThumbFallback">
+      <img src="/assets/icons/playlist.svg" alt="Playlist" className="ce-zoneThumbPlaylistIcon" draggable={false} />
+    </div>
+  ) : (
+    <div className="ce-zoneThumbText">{it.mediaType?.toUpperCase() ?? "MEDIA"}</div>
+  )}
+</button>
+
 
                         {/* Middle */}
                         <div className="ce-zoneMid">
                           <div className="ce-zoneItemName">{it.name}</div>
-
                           <div className="ce-zoneDurationRow">
                             <input
                               type="text"
                               className={`ce-zoneDurationInput ${isVideo || isPlaylist ? "is-readonly" : ""}`}
-                              value={formatHMS(dur)}
+                              value={shownValue}
+                              readOnly={isVideo || isPlaylist}
                               onChange={(e) => {
                                 if (isVideo || isPlaylist) return;
-                                const next = parseHMS(e.target.value);
-                                if (next != null) updateItemInZone(activeZoneId, it.id, { durationSec: Math.max(1, next) });
+                                const v = e.target.value;
+                                setDurationDrafts((prev: Record<string, string>) => ({ ...prev, [draftKey]: v }));
                               }}
-                              onBlur={(e) => {
-                                if (isVideo) return;
-                                const next = parseHMS(e.target.value);
-                                updateItemInZone(activeZoneId, it.id, { durationSec: Math.max(1, next ?? dur) });
+                              onBlur={() => {
+                                if (isVideo || isPlaylist) return;
+                                const raw = durationDrafts[draftKey] ?? formatHMS(dur);
+                                const next = parseHMS(raw);
+                                const finalSec = Math.max(1, next ?? dur);
+                                updateItemInZone(activeZoneId, it.id, { durationSec: finalSec });
+                                // cleanup draft (so it displays normalized format)
+                                setDurationDrafts((prev: Record<string, string>) => {
+                                  const copy = { ...prev };
+                                  delete copy[draftKey];
+                                  return copy;
+                                });
                               }}
                               title={isVideo ? "Video duration (not editable)" : "Duration (HH:MM:SS)"}
-                              readOnly={isVideo || isPlaylist}
                             />
                           </div>
                         </div>
@@ -2664,7 +2670,6 @@ const dur = getDisplayDurationSec(it);
                                 </div>
                               ))}
                             </div>
-
                             <button
                               type="button"
                               onClick={() => addScheduleRow(activeZoneId, it.id)}
@@ -2684,26 +2689,24 @@ const dur = getDisplayDurationSec(it);
                             >
                               🗑
                             </button>
-
                             <button
-  type="button"
-  aria-label="Drag"
-  title="Drag to reorder"
-  className="ce-zoneIconBtn ce-zoneDragBtn"
-  draggable
-  onDragStart={(e) => {
-    setDragItemId(it.id);
-    e.dataTransfer.effectAllowed = "move";
-    e.dataTransfer.setData("text/plain", it.id);
-  }}
-  onDragEnd={() => {
-    setDragItemId(null);
-    setDragOverItemId(null);
-  }}
->
-  ☰
-</button>
-
+                              type="button"
+                              aria-label="Drag"
+                              title="Drag to reorder"
+                              className="ce-zoneIconBtn ce-zoneDragBtn"
+                              draggable
+                              onDragStart={(e) => {
+                                setDragItemId(it.id);
+                                e.dataTransfer.effectAllowed = "move";
+                                e.dataTransfer.setData("text/plain", it.id);
+                              }}
+                              onDragEnd={() => {
+                                setDragItemId(null);
+                                setDragOverItemId(null);
+                              }}
+                            >
+                              ☰
+                            </button>
                           </div>
                         </div>
                       </div>
@@ -2731,7 +2734,6 @@ const dur = getDisplayDurationSec(it);
           )}
         </div>
 
-
         <div className="ce-side">
           <div className="ce-side-tabs">
             <button
@@ -2757,7 +2759,6 @@ const dur = getDisplayDurationSec(it);
                   <div className="ce-dim-label">Dimension</div>
                   <div className="ce-dim-value">{dimLabel}</div>
                 </div>
-
                 <button
                   className="btn btn-ghost"
                   onClick={() => {
@@ -2783,7 +2784,6 @@ const dur = getDisplayDurationSec(it);
                     showBadges={false}
                   />
                 </div>
-
                 <button className="btn btn-ghost" onClick={() => setLayoutModalOpen(true)} type="button">
                   Edit Layout
                 </button>
@@ -2829,7 +2829,6 @@ const dur = getDisplayDurationSec(it);
                   <div className="ce-settings-label">
                     Enable Transition <span className="ce-q">?</span>
                   </div>
-
                   <button
                     className={`ce-toggle ${activeTransition.enabled ? "is-on" : ""}`}
                     onClick={() => updateActiveTransition({ enabled: !activeTransition.enabled })}
@@ -2847,20 +2846,13 @@ const dur = getDisplayDurationSec(it);
                       value={activeTransition.type}
                       onChange={(e) => {
                         const next = e.target.value as TransitionMain;
-
                         if (next === "cut") updateActiveTransition({ type: "cut", durationSec: 0 });
                         if (next === "fade") updateActiveTransition({ type: "fade", durationSec: 0.5, color: "#000000" });
                         if (next === "slide")
-                          updateActiveTransition({
-                            type: "slide",
-                            durationSec: 0.6,
-                            direction: "right",
-                            easing: "ease-in-out",
-                          });
+                          updateActiveTransition({ type: "slide", durationSec: 0.6, direction: "right", easing: "ease-in-out" });
                         if (next === "push") updateActiveTransition({ type: "push", durationSec: 0.6, direction: "right" });
                         if (next === "wipe") updateActiveTransition({ type: "wipe", durationSec: 0.6, direction: "right" });
-                        if (next === "zoom")
-                          updateActiveTransition({ type: "zoom", durationSec: 0.6, zoomMode: "in", zoomStartScale: 0.9 });
+                        if (next === "zoom") updateActiveTransition({ type: "zoom", durationSec: 0.6, zoomMode: "in", zoomStartScale: 0.9 });
                       }}
                       disabled={!activeTransition.enabled}
                     >
@@ -2953,7 +2945,6 @@ const dur = getDisplayDurationSec(it);
                           <option value="out">Out</option>
                         </select>
                       </label>
-
                       <label className="ce-field">
                         <div className="ce-field-label">Start Scale</div>
                         <input
@@ -2969,9 +2960,9 @@ const dur = getDisplayDurationSec(it);
                     </>
                   )}
                 </div>
-              </div>
 
-              <div className="ce-tip">Note: current backend saves a single channel-level transition.</div>
+                <div className="ce-tip">Note: current backend saves a single channel-level transition.</div>
+              </div>
             </div>
           )}
         </div>
@@ -2985,19 +2976,18 @@ const dur = getDisplayDurationSec(it);
         </div>
       )}
 
-<MediaPreviewModal
-  open={previewOpen}
-  item={previewItem}
-  meta={previewItem?.sourceType === "media" ? mediaMeta[previewItem.sourceId] : undefined}
-  onClose={closePreview}
-  onDelete={() => {
-    if (!previewItem) return;
-    deleteItemFromZone(activeZoneId, previewItem.id); // delete from the CURRENT zone list
-    closePreview();
-  }}
-  onDownload={(url, filename) => downloadUrlToFile(url, filename)}
-/>
-
+      <MediaPreviewModal
+        open={previewOpen}
+        item={previewItem}
+        meta={previewItem?.sourceType === "media" ? mediaMeta[previewItem.sourceId] : undefined}
+        onClose={closePreview}
+        onDelete={() => {
+          if (!previewItem) return;
+          deleteItemFromZone(activeZoneId, previewItem.id);
+          closePreview();
+        }}
+        onDownload={(url, filename) => downloadUrlToFile(url, filename)}
+      />
 
       <ChannelSizeModal
         open={channelSizeOpen}
@@ -3024,88 +3014,77 @@ const dur = getDisplayDurationSec(it);
           setLayoutId(nextId);
           setLayoutModalOpen(false);
         }}
-        
       />
 
       <ChannelContentPickerModal
         open={contentPickerOpen}
         onClose={() => setContentPickerOpen(false)}
         onConfirm={(items: PickerResult[]) => {
-          // assign picked items to the active zone
           setZoneContents((prev) => {
             const zoneId = activeZoneId;
             const existing = prev[zoneId] ?? [];
 
             const mapped: ZoneContentItem[] = items.map((it, idx) => {
-              const sourceType = it.type as "media" | "playlist";
-              const sourceId = it.item.id;
+  const sourceType = it.type as "media" | "playlist";
+  const sourceId = it.item.id;
 
-              const name = (it.item as any)?.name ?? (it.item as any)?.title ?? "(untitled)";
+  const name = (it.item as any)?.name ?? (it.item as any)?.title ?? "(untitled)";
+  const mediaType =
+    sourceType === "media"
+      ? (((it.item as any)?.type as "image" | "video" | undefined) ?? undefined)
+      : undefined;
 
-              const mediaType =
-                sourceType === "media" ? (((it.item as any)?.type as "image" | "video" | undefined) ?? undefined) : undefined;
+  const thumbUrl = buildThumbUrlFromItem(it.item);
+  const mediaUrl = buildPublicMediaUrlFromItem(it.item);
 
-              const thumb =
-                (it.item as any)?.thumbnailUrl ??
-                (it.item as any)?.thumbUrl ??
-                (it.item as any)?.thumbnail ??
-                (it.item as any)?.previewUrl ??
-                (it.item as any)?.url ??
-                null;
+  const pickedDur =
+    typeof (it.item as any)?.durationSec === "number"
+      ? (it.item as any).durationSec
+      : typeof (it.item as any)?.duration === "number"
+      ? (it.item as any).duration
+      : typeof (it.item as any)?.durationMs === "number"
+      ? Math.round((it.item as any).durationMs / 1000)
+      : null;
 
-              const pickedDur =
-  typeof (it.item as any)?.durationSec === "number"
-    ? (it.item as any).durationSec
-    : typeof (it.item as any)?.duration === "number"
-    ? (it.item as any).duration
-    : typeof (it.item as any)?.durationMs === "number"
-    ? Math.round((it.item as any).durationMs / 1000)
-    : null;
+  const durationSec =
+    sourceType === "media"
+      ? mediaType === "image"
+        ? 10
+        : typeof pickedDur === "number" && pickedDur > 0
+        ? pickedDur
+        : 0
+      : 0;
 
-// ✅ IMPORTANT:
-// - images: default 10s editable
-// - videos: use picked duration if provided else 0 (will be resolved later by resolveMediaMeta)
-// - playlists: set 0 and let resolvePlaylistMeta fill playlistMeta for UI display
-const durationSec =
-  sourceType === "media"
-    ? mediaType === "image"
-      ? 10
-      : typeof pickedDur === "number" && pickedDur > 0
-      ? pickedDur
-      : 0
-    : 0;
-const schedules = [defaultSchedule()];
+  const schedules = [defaultSchedule()];
 
-const next: ZoneContentItem = {
-  id: crypto.randomUUID(),
-  sourceType,
-  sourceId,
-  name,
-  mediaType,
-  durationSec: durationSec, // ✅ no shorthand
-  order: existing.length + idx,
-  startAt: null,
-  endAt: null,
-  thumbnailUrl: thumb,
-  schedules: schedules,
-  schedule: schedules[0],
-};
+  return {
+    id: crypto.randomUUID(),
+    sourceType,
+    sourceId,
+    name,
+    mediaType,
+    durationSec,
+    order: existing.length + idx,
+    startAt: null,
+    endAt: null,
+    thumbnailUrl: thumbUrl,
+    url: mediaUrl,
+    schedules,
+    schedule: schedules[0],
+  };
+});
 
 
-              return next;
-            });
-
-            return {
-              ...prev,
-              [zoneId]: [...existing, ...mapped],
-            };
+            return { ...prev, [zoneId]: [...existing, ...mapped] };
           });
+
           clearNoop(setSaveStatus);
-          // resolve media meta for new media items (thumbnail + video duration)
+
           for (const it of items) {
-            if (it.type === "media") void resolveMediaMeta(it.item.id);
-            if (it.type === "playlist") void resolvePlaylistMeta(it.item.id);
-          }
+  if (it.type === "media") void resolveMediaMeta(it.item.id);
+  if (it.type === "playlist") void resolvePlaylistMeta(it.item.id);
+}
+
 
           setContentPickerOpen(false);
         }}
