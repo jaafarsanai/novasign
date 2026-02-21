@@ -1,5 +1,6 @@
+// apps/api/src/screens/screens.controller.ts
+
 import {
-  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -10,41 +11,33 @@ import {
   Post,
 } from "@nestjs/common";
 import { ScreensService } from "./screens.service";
-import { WsStateService } from "../ws/ws-state.service";
+
+type PairDto = { code: string };
+type RenameDto = { name: string };
+
+type AssignContentDto = {
+  type: "channel" | "playlist" | "media" | "CHANNEL" | "PLAYLIST" | "MEDIA";
+  id: string | null;
+};
 
 @Controller("screens")
 export class ScreensController {
-  constructor(
-    private readonly screens: ScreensService,
-    private readonly wsState: WsStateService
-  ) {}
+  constructor(private readonly screens: ScreensService) {}
 
   @Get()
   async list() {
-    const rows = await this.screens.listScreens();
-
-    return rows.map((s: any) => {
-      const virtualSessionId = s.isVirtual ? this.screens.ensureVirtualSessionForCode(s.pairingCode) : null;
-
-      return {
-        id: s.id,
-        name: s.name,
-        pairingCode: s.pairingCode,
-        pairedAt: s.pairedAt,
-        lastSeenAt: s.lastSeenAt,
-        isVirtual: !!s.isVirtual,
-        assignedPlaylistId: s.assignedPlaylistId ?? null,
-        assignedPlaylistName: s.assignedPlaylist?.name ?? null,
-        virtualSessionId,
-      };
-    });
+    return this.screens.listScreensForAdmin();
   }
 
   @Post("virtual-session")
   async createVirtualSession() {
-    return this.screens.createVirtualSession(); // { id, code }
+    return this.screens.createVirtualSession();
   }
 
+  /**
+   * ✅ NEW: resolve virtual session by opaque id (used by VirtualScreenPage)
+   * GET /api/screens/virtual-session/:id
+   */
   @Get("virtual-session/:id")
   async getVirtualSession(@Param("id") id: string) {
     const s = this.screens.getVirtualSessionByIdOrNull(id);
@@ -53,78 +46,53 @@ export class ScreensController {
   }
 
   @Post("pair")
-  async pair(@Body() body: { code: string }) {
-    const updated = await this.screens.pairByCodeUpsert(body?.code);
-
-    await this.wsState.pushVirtualScreenBundle(updated.pairingCode);
-    await this.wsState.pushAdminScreenSnapshot(updated.id);
-    this.wsState.broadcastScreensChanged("pair");
-
-    return { ok: true, id: updated.id };
-  }
-
-  @Post(":id/assign-playlist")
-  async assignPlaylist(@Param("id") id: string, @Body() body: { playlistId: string | null }) {
-    const updated = await this.screens.assignPlaylist(id, body?.playlistId ?? null);
-
-    // Push to virtual screen room (if open) so it updates quickly
-    const snap = await this.screens.getAdminScreenSnapshotById(updated.id);
-    if (snap?.pairingCode) {
-      await this.wsState.pushVirtualScreenState(snap.pairingCode);
-      await this.wsState.pushVirtualScreenPlaylist(snap.pairingCode);
-    }
-
-    await this.wsState.pushAdminScreenSnapshot(updated.id);
-    this.wsState.broadcastScreensChanged("assign-playlist");
-
-    return { ok: true };
+  async pair(@Body() dto: PairDto) {
+    return this.screens.pairByCodeUpsert(dto.code);
   }
 
   @Patch(":id")
-  async rename(@Param("id") id: string, @Body() body: { name: string }) {
-    const name = String(body?.name ?? "").trim();
-    if (!name) throw new BadRequestException("Name cannot be empty.");
+  async rename(@Param("id") id: string, @Body() dto: RenameDto) {
+    return this.screens.renameScreenById(id, dto.name);
+  }
 
-    const updated = await this.screens.renameScreenById(id, name);
-
-    await this.wsState.pushAdminScreenSnapshot(updated.id);
-    this.wsState.broadcastScreensChanged("rename");
-
-    if (updated?.pairingCode) {
-      await this.wsState.pushVirtualScreenState(updated.pairingCode);
-    }
-
-    return { ok: true };
+  @Delete(":id")
+  async remove(@Param("id") id: string) {
+    return this.screens.deleteByIdAndReturnCode(id);
   }
 
   @Post(":id/refresh")
   async refresh(@Param("id") id: string) {
     const snap = await this.screens.getAdminScreenSnapshotById(id);
     if (!snap) throw new NotFoundException("Screen not found");
+    return { ok: true };
+  }
 
-    if (snap.pairingCode) {
-      await this.wsState.pushVirtualScreenState(snap.pairingCode);
-      await this.wsState.pushVirtualScreenPlaylist(snap.pairingCode);
-      await this.wsState.pushVirtualScreenRefresh(snap.pairingCode);
+  /**
+   * ✅ Generic assignment used by ScreenSetContentModal
+   * Accepts BOTH lowercase and uppercase types to avoid mismatch.
+   */
+  @Post(":id/assign-content")
+  async assignContent(@Param("id") screenId: string, @Body() dto: AssignContentDto) {
+    const typeRaw = String(dto?.type ?? "").trim();
+    const idRaw = dto?.id ? String(dto.id).trim() : null;
+
+    if (!typeRaw || !idRaw) {
+      throw new NotFoundException("Missing type or id");
     }
 
-    await this.wsState.pushAdminScreenSnapshot(id);
-    this.wsState.broadcastScreensChanged("refresh");
+    const type =
+      typeRaw.toLowerCase() === "playlist"
+        ? "PLAYLIST"
+        : typeRaw.toLowerCase() === "channel"
+          ? "CHANNEL"
+          : typeRaw.toLowerCase() === "media"
+            ? "MEDIA"
+            : typeRaw.toUpperCase();
 
-    return { ok: true };
-  }
+    if (!["PLAYLIST", "CHANNEL", "MEDIA"].includes(type)) {
+      throw new NotFoundException("Invalid type");
+    }
 
-  @Delete(":id")
-  async delete(@Param("id") id: string) {
-    const code = await this.screens.deleteByIdAndReturnCode(id);
-
-    await this.wsState.pushVirtualScreenState(code);
-    await this.wsState.pushVirtualScreenPlaylist(code);
-
-    await this.wsState.pushAdminScreenDeleted(id);
-    this.wsState.broadcastScreensChanged("delete");
-
-    return { ok: true };
+    return this.screens.assignContent(screenId, type as any, idRaw);
   }
 }
-

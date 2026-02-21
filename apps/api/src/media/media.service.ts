@@ -8,37 +8,96 @@ import { randomUUID } from "crypto";
 export class MediaService {
   constructor(private readonly prisma: PrismaService) {}
 
-  async list(opts?: { search?: string; type?: string; folderId?: string }) {
-    const q = (opts?.search || "").trim();
-    const t = (opts?.type || "").trim().toLowerCase();
-    const folderIdRaw = opts?.folderId != null ? String(opts.folderId) : undefined;
+  // media.service.ts
 
-    const and: any[] = [];
+async list(opts?: {
+  search?: string;
+  type?: string;
+  folderId?: string;
+  includeFolders?: boolean;
+}) {
+  const q = (opts?.search || "").trim();
+  const t = (opts?.type || "").trim().toLowerCase();
+  const folderIdRaw = opts?.folderId != null ? String(opts.folderId) : undefined;
+  const includeFolders = !!opts?.includeFolders;
 
-    if (q) {
-      and.push({
-        OR: [
-          { name: { contains: q, mode: "insensitive" } },
-          { type: { contains: q, mode: "insensitive" } },
-          { url: { contains: q, mode: "insensitive" } },
-        ],
-      });
-    }
+  const and: any[] = [];
 
-    if (t && (t === "image" || t === "video")) {
-      and.push({ type: t });
-    }
-
-    if (folderIdRaw) {
-      if (folderIdRaw === "root") and.push({ folderId: null });
-      else and.push({ folderId: folderIdRaw });
-    }
-
-    return this.prisma.media.findMany({
-      where: and.length ? { AND: and } : undefined,
-      orderBy: { createdAt: "desc" },
+  if (q) {
+    and.push({
+      OR: [
+        { name: { contains: q, mode: "insensitive" } },
+        { type: { contains: q, mode: "insensitive" } },
+        { url: { contains: q, mode: "insensitive" } },
+      ],
     });
   }
+
+  if (t && (t === "image" || t === "video")) {
+    and.push({ type: t });
+  }
+
+  // folderId semantics:
+  // - folderId=root => folderId null
+  // - folderId=<id> => that folder
+  if (folderIdRaw) {
+    if (folderIdRaw === "root") and.push({ folderId: null });
+    else and.push({ folderId: folderIdRaw });
+  }
+
+  const items = await this.prisma.media.findMany({
+    where: and.length ? { AND: and } : undefined,
+    orderBy: { createdAt: "desc" },
+  });
+
+  // ✅ folders under current "folderId"
+  // NOTE: only meaningful when folderId is provided (root or specific)
+  let folders: Array<{ id: string; name: string; parentId: string | null }> = [];
+
+  if (includeFolders) {
+    const parentId =
+      folderIdRaw == null
+        ? null
+        : folderIdRaw === "root"
+          ? null
+          : folderIdRaw;
+
+    const folderWhere: any = { parentId };
+
+    // Optional: apply search filter to folders too (nice UX)
+    if (q) folderWhere.name = { contains: q, mode: "insensitive" };
+
+    const f = await this.prisma.mediaFolder.findMany({
+      where: folderWhere,
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, parentId: true },
+    });
+
+    folders = f.map((x) => ({
+      id: String(x.id),
+      name: String(x.name),
+      parentId: x.parentId ? String(x.parentId) : null,
+    }));
+  }
+
+  return { items, folders };
+}
+
+async listFolders(opts?: { parentId?: string }) {
+  const parentIdRaw = String(opts?.parentId ?? "root");
+
+  const where =
+    parentIdRaw === "root"
+      ? { parentId: null }
+      : { parentId: parentIdRaw };
+
+  return this.prisma.mediaFolder.findMany({
+    where,
+    select: { id: true, name: true, parentId: true },
+    orderBy: { name: "asc" },
+  });
+}
+
 
   /**
    * meta rows are matched by (originalname + size)
@@ -171,9 +230,9 @@ export class MediaService {
     return { ok: true, count: uniq.length };
   }
 
-async getById(id: string) {
-  return this.prisma.media.findUnique({ where: { id: String(id) } });
-}
+  async getById(id: string) {
+    return this.prisma.media.findUnique({ where: { id: String(id) } });
+  }
 
   /**
    * If multer used diskStorage, file.filename exists and file is already persisted.
@@ -214,4 +273,3 @@ async getById(id: string) {
     }
   }
 }
-

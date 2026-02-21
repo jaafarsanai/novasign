@@ -1,3 +1,4 @@
+// apps/api/src/channels/channels.controller.ts
 import {
   Body,
   Controller,
@@ -8,101 +9,100 @@ import {
   Post,
   Put,
   Query,
+  Patch,
 } from "@nestjs/common";
+import { PrismaService } from "../prisma/prisma.service";
 
 type Orientation = "landscape" | "portrait";
 
-type Channel = {
-  id: string;
-  name: string;
-  orientation: Orientation;
-  createdAt: string;
-  updatedAt?: string;
-
-  // Editor state (in-memory for now)
-  layoutId?: string;
-  zones?: Record<string, any>;
-  transition?: {
-    enabled: boolean;
-    type?: string;
-    duration?: number;
-    direction?: string;
-  };
-};
-
 @Controller("/channels")
 export class ChannelsController {
-  private items: Channel[] = [];
+  constructor(private readonly prisma: PrismaService) {}
 
   @Get()
-  list(@Query("search") search?: string) {
-    const s = (search || "").trim().toLowerCase();
-    const items = !s ? this.items : this.items.filter(c => c.name.toLowerCase().includes(s));
+  async list(@Query("search") search?: string) {
+    const s = (search || "").trim();
+    const items = await this.prisma.channel.findMany({
+      where: s ? { name: { contains: s, mode: "insensitive" } } : undefined,
+      orderBy: { createdAt: "desc" },
+    });
     return { items };
   }
 
   @Get(":id")
-  getById(@Param("id") id: string) {
-    const item = this.items.find(x => x.id === id) ?? null;
-    return { item };
+  async getById(@Param("id") id: string) {
+    const item = await this.prisma.channel.findUnique({ where: { id } });
+    return { item: item ?? null };
   }
 
   @Post()
-  create(@Body() dto: { name: string; orientation: Orientation }) {
-    const item: Channel = {
-      id: crypto.randomUUID(),
-      name: dto?.name ?? "Untitled",
-      orientation: dto?.orientation ?? "landscape",
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      layoutId: "default",
-      zones: {},
-      transition: { enabled: false, type: "slide", duration: 0.5, direction: "right" },
-    };
-    this.items.unshift(item);
+  async create(@Body() dto: { name: string; orientation: Orientation }) {
+    const item = await this.prisma.channel.create({
+      data: {
+        name: dto?.name ?? "Untitled",
+        orientation: dto?.orientation ?? "landscape",
+        layoutId: "default",
+        zones: {}, // JSON
+        transition: { enabled: false, type: "slide", duration: 0.5, direction: "right" } as any,
+      },
+    });
     return { item };
   }
 
-  @Put(":id")
-  update(
+  @Patch(":id")
+  async patch(
     @Param("id") id: string,
-    @Body()
-    dto: Partial<Pick<Channel, "name" | "orientation" | "layoutId" | "zones" | "transition">>,
+    @Body() dto: Partial<{ name: string; orientation: Orientation; layoutId: string; zones: any; transition: any }>,
   ) {
-    const idx = this.items.findIndex(x => x.id === id);
-    if (idx === -1) throw new NotFoundException();
+    return this.update(id, dto);
+  }
 
-    const prev = this.items[idx];
-    const next: Channel = {
-      ...prev,
-      ...dto,
-      updatedAt: new Date().toISOString(),
-    };
-
-    this.items[idx] = next;
-    return { item: next };
+  @Put(":id")
+  async update(
+    @Param("id") id: string,
+    @Body() dto: Partial<{ name: string; orientation: Orientation; layoutId: string; zones: any; transition: any }>,
+  ) {
+    try {
+      const item = await this.prisma.channel.update({
+        where: { id },
+        data: {
+          ...dto,
+          updatedAt: new Date(),
+        },
+      });
+      return { item };
+    } catch (e: any) {
+      if (e?.code === "P2025") throw new NotFoundException();
+      throw e;
+    }
   }
 
   @Delete(":id")
-  remove(@Param("id") id: string) {
-    this.items = this.items.filter(x => x.id !== id);
-    return { ok: true };
+  async remove(@Param("id") id: string) {
+    try {
+      await this.prisma.channel.delete({ where: { id } });
+      return { ok: true };
+    } catch (e: any) {
+      if (e?.code === "P2025") throw new NotFoundException();
+      throw e;
+    }
   }
 
   @Post(":id/duplicate")
-  duplicate(@Param("id") id: string) {
-    const src = this.items.find(x => x.id === id);
+  async duplicate(@Param("id") id: string) {
+    const src = await this.prisma.channel.findUnique({ where: { id } });
     if (!src) return { item: null };
 
-    const copy: Channel = {
-      ...src,
-      id: crypto.randomUUID(),
-      name: `${src.name} (copy)`,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    this.items.unshift(copy);
+    const copy = await this.prisma.channel.create({
+      data: {
+        name: `${src.name} (copy)`,
+        orientation: src.orientation as any,
+        layoutId: src.layoutId,
+        zones: src.zones as any,
+        transition: src.transition as any,
+      },
+    });
+
     return { item: copy };
   }
 }
-

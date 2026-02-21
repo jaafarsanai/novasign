@@ -1,0 +1,95 @@
+.ns2-cfm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 24, 40, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+
+.ns2-cfm-modal {
+  width: min(520px, calc(100vw - 24px));
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 18px 60px rgba(16, 24, 40, 0.25);
+  overflow: hidden;
+}
+
+.ns2-cfm-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 18px 10px;
+  border-bottom: 1px solid rgba(16, 24, 40, 0.08);
+}
+
+.ns2-cfm-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #101828;
+}
+
+.ns2-cfm-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: rgba(16, 24, 40, 0.65);
+}
+
+.ns2-cfm-x {
+  border: 0;
+  background: transparent;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.ns2-cfm-x:hover {
+  background: rgba(16, 24, 40, 0.06);
+}
+
+.ns2-cfm-body {
+  padding: 14px 18px 10px;
+}
+
+.ns2-cfm-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(16, 24, 40, 0.75);
+  margin-bottom: 8px;
+}
+
+.ns2-cfm-input {
+  width: 100%;
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(16, 24, 40, 0.18);
+  padding: 0 12px;
+  outline: none;
+}
+
+.ns2-cfm-input:focus {
+  border-color: rgba(69, 123, 240, 0.9);
+  box-shadow: 0 0 0 4px rgba(69, 123, 240, 0.15);
+}
+
+.ns2-cfm-error {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(244, 63, 94, 0.08);
+  color: rgba(190, 18, 60, 0.95);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
+.ns2-cfm-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid rgba(16, 24, 40, 0.08);
+}

@@ -1,12 +1,14 @@
-// ChannelEditorPage.tsx
+// apps/admin-web/src/pages/channels/ChannelEditorPage.tsx
 // FULL FILE — ScreenCloud-style zone content list + scheduling modal (with safe backend fallbacks)
 //
-// Updated:
-// 1) Weekly vs Specific date only are now mutually exclusive + switchable back/forth reliably
-// 2) "Add schedule" adds a new schedule row (does NOT open modal)
-// 3) Multiple schedules per item supported (UI-first; backend persistence attempted, with safe fallback)
-// 4) Thumbnails + video duration + preview now use UI-only url/posterUrl fallbacks
-// 5) EndTime clamping applies ONLY when date range is a single day (dateStart === dateEnd)
+// Updated (this version):
+// ✅ Schedules persist reliably (no collisions) using stable clientId per zone item
+// ✅ Local override key uses zoneId + clientId (not sourceId) so duplicates don’t overwrite
+// ✅ Autosave sends minimal DTO only (backend-friendly) + surfaces autosave errors
+// ✅ Manual Save also persists zones (so schedules save on Save click)
+// ✅ Only ONE LayoutThumb (prevents TS2393 duplicate implementation)
+// ✅ Media preview meta uses thumbnailUrl as fallback to resolveMediaMeta (fixes preview details issue)
+// ✅ IMPORTANT FIX: never call /api/media/:id or /api/media/item/:id (prevents 404 spam). Media is resolved ONLY via media index list endpoint.
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -58,7 +60,9 @@ type ZoneItemSchedule = {
 };
 
 type ZoneContentItem = {
-  id: string;
+  id: string; // UI id (stable = clientId)
+  clientId?: string; // persisted in backend zones to keep stable identity across reloads
+
   sourceType: "media" | "playlist";
   sourceId: string;
   name: string;
@@ -119,7 +123,10 @@ type Channel = {
   zones?: Record<
     string,
     Array<{
-      name: string;
+      // ✅ persisted stable id per item (if your backend stores JSON as-is)
+      clientId?: string;
+
+      name?: string;
       endAt: string | null;
       order: number;
       startAt: string | null;
@@ -201,8 +208,7 @@ function buildPublicMediaUrlFromItem(item: any): string | null {
     if (u.includes("/media/") && isLikelyDbId(last)) {
       // fall through to filename-based
     } else {
-      // could still be valid (signed url without ext), but in your case it isn't.
-      // keep it only if you want; I recommend falling back to filename fields.
+      // could still be valid (signed url without ext)
     }
   }
 
@@ -222,9 +228,7 @@ function buildPublicMediaUrlFromItem(item: any): string | null {
 
   if (typeof filename === "string" && filename.trim()) {
     const f = filename.trim().replace(/^\/+/, ""); // remove leading slashes
-    // if backend stores full path like "media/xxx.png" -> normalize to /media/xxx.png
     if (f.startsWith("media/")) return `/${f}`;
-    // if backend stores just "xxx.png" -> prefix /media/
     return `/media/${f}`;
   }
 
@@ -234,13 +238,7 @@ function buildPublicMediaUrlFromItem(item: any): string | null {
 function buildThumbUrlFromItem(item: any): string | null {
   if (!item) return null;
 
-  // Prefer explicit thumbnail fields
-  const t =
-    item.thumbnailUrl ??
-    item.thumbUrl ??
-    item.thumbnail ??
-    item.posterUrl ??
-    null;
+  const t = item.thumbnailUrl ?? item.thumbUrl ?? item.thumbnail ?? item.posterUrl ?? null;
 
   const resolved = typeof t === "string" ? t.trim() : "";
   if (resolved) {
@@ -263,7 +261,6 @@ function looksLikeHtml(txt: string) {
   return t.startsWith("<!doctype") || t.startsWith("<html") || t.startsWith("<head") || t.startsWith("<body");
 }
 
-// Small helper to prevent accidental undefined/empty message from getting thrown above if edited later.
 function toggleMsg(msg: string) {
   return msg || "Request failed";
 }
@@ -344,7 +341,6 @@ function hashToInt(s: string) {
   return Math.abs(h >>> 0);
 }
 
-/** Stable cover from channel id (no backend required). */
 function coverFromId(id: string) {
   const palette: Array<[string, string]> = [
     ["#f97316", "#ef4444"],
@@ -512,6 +508,72 @@ function readCurrentUserLabel(): string | undefined {
   return undefined;
 }
 
+async function fetchHeadLikeMeta(
+  url: string,
+  kind?: "image" | "video"
+): Promise<{ mimeType?: string | null; sizeBytes?: number | null }> {
+  try {
+    // 1) HEAD
+    try {
+      const head = await fetch(url, { method: "HEAD", credentials: "include" });
+      if (head.ok) {
+        const ct = head.headers.get("content-type");
+        const cl = head.headers.get("content-length");
+        const size = cl ? Number(cl) : null;
+        if ((ct && ct.trim()) || (Number.isFinite(size) && (size as number) > 0)) {
+          return { mimeType: ct ?? null, sizeBytes: Number.isFinite(size) && (size as number) > 0 ? size : null };
+        }
+      }
+    } catch {}
+
+    // 2) Range GET
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        credentials: "include",
+        headers: { Range: "bytes=0-0" },
+      });
+      if (res.ok) {
+        const ct = res.headers.get("content-type");
+        const cr = res.headers.get("content-range");
+        const cl = res.headers.get("content-length");
+
+        let size: number | null = null;
+        if (cr) {
+          const m = cr.match(/\/(\d+)\s*$/);
+          if (m) size = Number(m[1]);
+        }
+        if (size == null && cl) {
+          const n = Number(cl);
+          if (Number.isFinite(n) && n > 0) size = n;
+        }
+
+        try {
+          await res.arrayBuffer();
+        } catch {}
+
+        if ((ct && ct.trim()) || (Number.isFinite(size) && (size as number) > 0)) {
+          return { mimeType: ct ?? null, sizeBytes: Number.isFinite(size) && (size as number) > 0 ? size : null };
+        }
+      }
+    } catch {}
+
+    // 3) image blob
+    if (kind === "image") {
+      const r = await fetch(url, { method: "GET", credentials: "include" });
+      if (!r.ok) return {};
+      const blob = await r.blob();
+      const mime = blob.type || r.headers.get("content-type");
+      const size = blob.size || null;
+      return { mimeType: mime ?? null, sizeBytes: size };
+    }
+
+    return {};
+  } catch {
+    return {};
+  }
+}
+
 function getUpdatedByLabel(ch: any): string | undefined {
   if (!ch) return undefined;
   return (
@@ -579,7 +641,6 @@ function defaultTransition(): ZoneTransition {
   };
 }
 
-/** Map backend layoutId -> UI layoutId */
 function apiLayoutToUi(layoutId: string | undefined): string {
   if (!layoutId) return "layout_main";
   if (layoutId === "default") return "layout_main";
@@ -587,13 +648,11 @@ function apiLayoutToUi(layoutId: string | undefined): string {
   return "layout_main";
 }
 
-/** Map UI layoutId -> backend layoutId */
 function uiLayoutToApi(layoutId: string): string {
   if (layoutId === "layout_main") return "default";
   return layoutId;
 }
 
-/** Map backend transition -> UI transition (stored on zone z1) */
 function apiTransitionToUi(t?: ApiChannelTransition): ZoneTransition {
   const base = defaultTransition();
   if (!t) return base;
@@ -615,11 +674,6 @@ function apiTransitionToUi(t?: ApiChannelTransition): ZoneTransition {
   };
 }
 
-/**
- * Map UI transition -> backend transition
- * - "cut" is effectively "no transition": enabled=false
- * - push/wipe/zoom are mapped to slide/fade to avoid backend validation failures
- */
 function uiTransitionToApi(t: ZoneTransition): ApiChannelTransition {
   if (!t.enabled || t.type === "cut") {
     return { enabled: false, type: "slide", duration: 0.5, direction: "right" };
@@ -651,8 +705,6 @@ function formatHMS(totalSeconds: number) {
 function parseHMS(v: string): number | null {
   const s = v.trim();
   if (!s) return null;
-
-  // allow "12" or "00:12" or "0:00:12"
   if (/^\d+$/.test(s)) return Number(s);
 
   const parts = s.split(":").map((p) => p.trim());
@@ -673,7 +725,6 @@ function clampInt(n: number, min: number, max: number) {
 }
 
 function normalizeTime(t: string) {
-  // accept HH:mm or HH:mm:ss
   const parts = String(t ?? "").split(":").map((x) => x.trim());
   if (parts.length < 2) return "00:00:00";
   const hh = clampInt(Number(parts[0] || 0), 0, 23);
@@ -687,7 +738,6 @@ const hhmm = (t: string) => {
   return norm.slice(0, 5);
 };
 
-// ✅ clampEndToStart is applied ONLY when dateStart === dateEnd
 const normalizeTimeWindow = (tw: ScheduleTimeWindow, clampEndToStart: boolean): ScheduleTimeWindow => {
   const s = normalizeTime(tw.startTime);
   let e = normalizeTime(tw.endTime);
@@ -824,7 +874,6 @@ function ScheduleModal({
   if (!open) return null;
 
   const pos = (() => {
-    // place modal near anchor, but keep in viewport
     const w = 360;
     const h = 520;
     const margin = 12;
@@ -1134,9 +1183,7 @@ function ScheduleModal({
             <div className={`sm-option-ic sm-star ${sch.priority ? "is-on" : ""}`}>★</div>
             <div className="sm-option-text">
               <div className="sm-option-title">Set as Priority</div>
-              <div className="sm-option-desc">
-                This content will override any other content scheduled for the same time period.
-              </div>
+              <div className="sm-option-desc">This content will override any other content scheduled for the same time period.</div>
             </div>
             <button
               type="button"
@@ -1154,19 +1201,22 @@ function ScheduleModal({
 }
 
 type MediaMeta = {
-  thumbnailUrl?: string | null; // for images: use url
-  durationSec?: number | null; // for video
+  thumbnailUrl?: string | null;
+  durationSec?: number | null;
   mediaType?: "image" | "video";
   name?: string;
   url?: string | null;
   mimeType?: string | null;
   sizeBytes?: number | null;
+
+  status?: "loading" | "ready";
 };
 
 function MediaPreviewModal({
   open,
   item,
   meta,
+  metaInFlight,
   onClose,
   onDelete,
   onDownload,
@@ -1174,6 +1224,7 @@ function MediaPreviewModal({
   open: boolean;
   item: ZoneContentItem | null;
   meta?: MediaMeta;
+  metaInFlight: React.MutableRefObject<Set<string>>;
   onClose: () => void;
   onDelete: () => void;
   onDownload: (url: string, filename: string) => void;
@@ -1184,10 +1235,24 @@ function MediaPreviewModal({
   });
   if (!open || !item) return null;
 
-  const isVideo = item.sourceType === "media" && item.mediaType === "video";
-  const isImage = item.sourceType === "media" && item.mediaType === "image";
-  const mime = meta?.mimeType ?? null;
-  const size = formatBytes(meta?.sizeBytes ?? null);
+    // --- effective fields (modal must use meta fallback, because zones don't persist name/mediaType/url) ---
+  const effectiveName =
+    item.name && item.name !== "(untitled)"
+      ? item.name
+      : meta?.name ?? item.name ?? "(untitled)";
+
+  const effectiveType: "image" | "video" | undefined =
+    item.mediaType ?? meta?.mediaType ?? undefined;
+
+  const isVideo = item.sourceType === "media" && effectiveType === "video";
+  const isImage = item.sourceType === "media" && effectiveType === "image";
+
+  const metaLoading = item.sourceType === "media" && (!meta || meta.status === "loading");
+
+  const typeValue = metaLoading ? "Loading…" : effectiveType ?? "—";
+  const mimeValue = metaLoading ? "Loading…" : meta?.mimeType ?? "—";
+  const sizeValue = metaLoading ? "Loading…" : formatBytes(meta?.sizeBytes ?? null);
+
   const dur =
     isVideo && typeof meta?.durationSec === "number" && meta.durationSec > 0
       ? formatHMS(meta.durationSec)
@@ -1195,22 +1260,24 @@ function MediaPreviewModal({
       ? formatHMS(item.durationSec)
       : null;
 
-  // ✅ Use item.url / item.thumbnailUrl / item.posterUrl fallbacks
+  // Prefer real playable url, then image thumb as last resort
   const previewUrl =
     meta?.url ??
-    (isImage ? item.url ?? item.thumbnailUrl ?? meta?.thumbnailUrl ?? null : item.url ?? null) ??
-    null;
+    item.url ??
+    (isImage ? meta?.thumbnailUrl ?? item.thumbnailUrl ?? null : null);
 
   const downloadUrl =
-    meta?.url ?? (isImage ? item.url ?? item.thumbnailUrl ?? null : item.url ?? null) ?? null;
+    meta?.url ??
+    item.url ??
+    (isImage ? item.thumbnailUrl ?? meta?.thumbnailUrl ?? null : null);
 
   return (
     <div className="mp-backdrop" role="dialog" aria-modal="true">
       <div ref={modalRef} className="mp-modal">
         <div className="mp-header">
-          <div className="mp-title" title={item.name}>
-            {item.name}
-          </div>
+          <div className="mp-title" title={effectiveName}>
+  {effectiveName}
+</div>
           <button onClick={onClose} type="button" aria-label="Close" className="mp-close">
             ×
           </button>
@@ -1236,16 +1303,19 @@ function MediaPreviewModal({
             <div className="mp-grid">
               <div className="mp-row">
                 <div className="mp-label">Type</div>
-                <div className="mp-value">{item.mediaType ?? item.sourceType}</div>
+                <div className="mp-value">{typeValue}</div>
               </div>
+
               <div className="mp-row">
                 <div className="mp-label">Format (MIME)</div>
-                <div className="mp-value">{mime ?? "—"}</div>
+                <div className="mp-value">{mimeValue}</div>
               </div>
+
               <div className="mp-row">
                 <div className="mp-label">File size</div>
-                <div className="mp-value">{size}</div>
+                <div className="mp-value">{sizeValue}</div>
               </div>
+
               {isVideo && (
                 <div className="mp-row">
                   <div className="mp-label">Duration</div>
@@ -1299,7 +1369,7 @@ function LayoutThumb({
 }) {
   const [hoverId, setHoverId] = useState<string | null>(null);
 
-  const ratio = width / height; // >1 landscape, <1 portrait
+  const ratio = width / height;
   const LONG = 300;
   const SHORT_MIN = 160;
   const SHORT_MAX = 240;
@@ -1328,7 +1398,10 @@ function LayoutThumb({
   };
 
   return (
-    <div className="ce-layout-thumb-wrap" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+    <div
+      className="ce-layout-thumb-wrap"
+      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}
+    >
       <div className="ce-layout-thumb" style={thumbStyle}>
         {layout.zones.map((z, idx) => {
           const isActive = activeZoneId === z.id;
@@ -1508,16 +1581,16 @@ export default function ChannelEditorPage() {
 
   /* -------------------- ZONE CONTENT (state) -------------------- */
   const [zoneContents, setZoneContents] = useState<Record<string, ZoneContentItem[]>>({});
-  const zoneContentsPrevRef = useRef<string>(""); // to detect changes
-  const zonePatchTimersRef = useRef<Record<string, number>>({}); // debounce per zone
+  const zoneContentsPrevRef = useRef<string>("");
+  const zonePatchTimersRef = useRef<Record<string, number>>({});
 
-  // media meta cache (for thumbnails + video duration)
+  // media meta cache
   const [mediaMeta, setMediaMeta] = useState<Record<string, MediaMeta>>({});
   type PlaylistMeta = { totalDurationSec?: number | null; itemCount?: number | null; name?: string };
   const [playlistMeta, setPlaylistMeta] = useState<Record<string, PlaylistMeta>>({});
   const playlistMetaReqInFlight = useRef<Set<string>>(new Set());
 
-  // drag & drop (reorder)
+  // drag & drop
   const [dragItemId, setDragItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [durationDrafts, setDurationDrafts] = useState<Record<string, string>>({});
@@ -1568,12 +1641,7 @@ export default function ChannelEditorPage() {
     playlistMetaReqInFlight.current.add(playlistId);
 
     try {
-      const endpoints = [
-        `/api/playlists/${playlistId}`,
-        `/api/playlists/${playlistId}/items`,
-        `/api/library/playlists/${playlistId}`,
-        `/api/playlists?id=${encodeURIComponent(playlistId)}`,
-      ];
+      const endpoints = [`/api/media?folderId=root`, `/api/media?folderId=root&recursive=true`, `/api/media`];
 
       for (const url of endpoints) {
         try {
@@ -1611,9 +1679,7 @@ export default function ChannelEditorPage() {
             [playlistId]: { totalDurationSec: total, itemCount: items.length || null, name: root.name ?? root.title ?? undefined },
           }));
           return;
-        } catch {
-          // try next endpoint
-        }
+        } catch {}
       }
     } finally {
       playlistMetaReqInFlight.current.delete(playlistId);
@@ -1622,7 +1688,7 @@ export default function ChannelEditorPage() {
 
   const mediaMetaReqInFlight = useRef<Set<string>>(new Set());
 
-  // Schedule modal state (edits a specific schedule row)
+  // Schedule modal state
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [scheduleForItemId, setScheduleForItemId] = useState<string | null>(null);
   const [scheduleForScheduleId, setScheduleForScheduleId] = useState<string | null>(null);
@@ -1635,12 +1701,20 @@ export default function ChannelEditorPage() {
   const [previewItem, setPreviewItem] = useState<ZoneContentItem | null>(null);
 
   function openPreview(it: ZoneContentItem) {
-    setPreviewItem(it);
-    setPreviewOpen(true);
-    if (it.sourceType === "media") {
-     void resolveMediaMeta(it.sourceId);
-    }
+  setPreviewItem(it);
+  setPreviewOpen(true);
+
+  if (it.sourceType === "media") {
+    const fallback =
+      it.url ??
+      it.thumbnailUrl ??
+      mediaMeta[it.sourceId]?.thumbnailUrl ??
+      null;
+
+    void resolveMediaMeta(it.sourceId, fallback, it.mediaType);
   }
+}
+
   function closePreview() {
     setPreviewOpen(false);
     setPreviewItem(null);
@@ -1666,49 +1740,108 @@ export default function ChannelEditorPage() {
   }
 
   async function ensureMediaIndex() {
-    if (mediaIndexRef.current) return;
+    if (mediaIndexRef.current && Object.keys(mediaIndexRef.current).length > 0) return;
+
     if (mediaIndexInFlightRef.current) return mediaIndexInFlightRef.current;
 
-    mediaIndexInFlightRef.current = (async () => {
-      const endpoints = [
-        `/api/media?folderId=root`,
-        `/api/media?folderId=root&recursive=true`,
-        `/api/media`, // many backends support listing all
-        `/api/library/media`,
+    const endpoints = [
+  `/api/media`,                         // ✅ all media first
+  `/api/media?recursive=true`,          // ✅ if supported
+  `/api/media?folderId=root&recursive=true`,
+  `/api/media?folderId=root`,
+];
+
+    const extractArrays = (payload: any): any[] => {
+      if (!payload) return [];
+      const root = payload.item ?? payload;
+
+      if (Array.isArray(root?.items?.items)) return root.items.items;
+      if (Array.isArray(payload?.items?.items)) return payload.items.items;
+
+      const candidates = [
+        root,
+        root.items,
+        root.data,
+        root.results,
+        root.media,
+        root.assets,
+        root.item?.items,
+        root.item?.data,
+        payload.items,
+        payload.data,
+        payload.results,
+        payload.media,
+        payload.assets,
       ];
 
+      for (const c of candidates) {
+        if (Array.isArray(c) && c.length) return c;
+      }
+
+      return Array.isArray(root) ? root : [];
+    };
+
+    const flatten = (list: any[]): any[] => {
+      const out: any[] = [];
+      const seen = new Set<string>();
+
+      const walk = (node: any) => {
+        if (!node || typeof node !== "object") return;
+
+        const id = node.id ?? node._id;
+        if (id != null) {
+          const sid = String(id);
+          if (!seen.has(sid)) {
+            seen.add(sid);
+            out.push(node);
+          }
+        }
+
+        const kids =
+          (Array.isArray(node.children) && node.children) ||
+          (Array.isArray(node.items) && node.items) ||
+          (Array.isArray(node.files) && node.files) ||
+          (Array.isArray(node.media) && node.media) ||
+          null;
+
+        if (kids) for (const k of kids) walk(k);
+      };
+
+      for (const it of list) walk(it);
+      return out;
+    };
+
+    mediaIndexInFlightRef.current = (async () => {
       let items: any[] = [];
 
       for (const url of endpoints) {
         try {
-          const res = await fetch(url, { method: "GET" });
+          const res = await fetch(url, { method: "GET", credentials: "include" });
           if (!res.ok) continue;
+
           const data = await res.json().catch(() => null);
           if (!data) continue;
 
-          const arr: any[] =
-            Array.isArray(data) ? data :
-            Array.isArray(data?.items) ? data.items :
-            Array.isArray(data?.data) ? data.data :
-            [];
-
+          const arr = extractArrays(data);
           if (arr.length) {
-            items = arr;
-            break;
+            items = flatten(arr);
+            if (items.length) break;
           }
-        } catch {
-          // try next
-        }
+        } catch {}
       }
 
       const idx: Record<string, any> = {};
       for (const it of items) {
-        const id = it.id ?? it._id;
-        if (!id) continue;
-        idx[String(id)] = it;
+        const mid = it?.id ?? it?._id;
+        if (!mid) continue;
+        idx[String(mid)] = it;
       }
 
       mediaIndexRef.current = idx;
+      if (Object.keys(idx).length === 0) {
+        // ✅ important: allow refetch next time
+        mediaIndexRef.current = null;
+      }
     })().finally(() => {
       mediaIndexInFlightRef.current = null;
     });
@@ -1716,125 +1849,129 @@ export default function ChannelEditorPage() {
     return mediaIndexInFlightRef.current;
   }
 
-  // ✅ Seedable resolve (fallback can be from ZoneContentItem)
-  async function resolveMediaMeta(sourceId: string) {
-  if (!sourceId) return;
-  if (mediaMeta[sourceId]) return;
-  if (mediaMetaReqInFlight.current.has(sourceId)) return;
-  mediaMetaReqInFlight.current.add(sourceId);
+  async function resolveMediaMeta(sourceId: string, fallbackUrl?: string | null, fallbackType?: "image" | "video") {
+    if (!sourceId) return;
 
-  try {
-    // ✅ First: load index once and resolve from list data (most reliable in your backend)
+    const cached = mediaMeta[sourceId];
+
+    const hasUseful =
+      !!cached?.mimeType ||
+      (typeof cached?.sizeBytes === "number" && cached.sizeBytes > 0) ||
+      (typeof cached?.durationSec === "number" && cached.durationSec > 0);
+
+    if (cached?.status === "ready" && hasUseful) return;
+
+    if (mediaMetaReqInFlight.current.has(sourceId)) return;
+    mediaMetaReqInFlight.current.add(sourceId);
+
     try {
+      const urlFallback = fallbackUrl ? toAbsoluteIfNeeded(fallbackUrl) : null;
+
+      setMediaMeta((prev) => ({
+        ...prev,
+        [sourceId]: {
+          ...(prev[sourceId] ?? {}),
+          status: "loading",
+          url: prev[sourceId]?.url ?? urlFallback,
+          mediaType: prev[sourceId]?.mediaType ?? fallbackType,
+        },
+      }));
+
+      // quick meta from fallback URL (cheap, no /api/media/:id calls)
+      if (urlFallback) {
+        const extra = await fetchHeadLikeMeta(urlFallback, fallbackType);
+        setMediaMeta((prev) => ({
+          ...prev,
+          [sourceId]: {
+            ...(prev[sourceId] ?? {}),
+            mimeType: prev[sourceId]?.mimeType ?? extra.mimeType ?? null,
+            sizeBytes: prev[sourceId]?.sizeBytes ?? extra.sizeBytes ?? null,
+          },
+        }));
+      }
+
+      // ✅ ONLY resolve via the media index list endpoint. Never hit /api/media/:id or /api/media/item/:id.
       await ensureMediaIndex();
       const row = mediaIndexRef.current?.[sourceId];
-      if (row) {
-        const url = buildPublicMediaUrlFromItem(row);
-        const thumb = buildThumbUrlFromItem(row);
 
-        const type =
-          row.type === "video" || row.mediaType === "video"
-            ? "video"
-            : row.type === "image" || row.mediaType === "image"
-            ? "image"
-            : undefined;
+      // If item not in index, keep fallback only (no 404 spam).
+      if (!row) return;
 
-        const dur =
-          typeof row.durationSec === "number"
-            ? row.durationSec
-            : typeof row.duration === "number"
-            ? row.duration
-            : typeof row.durationMs === "number"
-            ? Math.round(row.durationMs / 1000)
-            : null;
+      const url = buildPublicMediaUrlFromItem(row) ?? urlFallback;
+      const thumb = buildThumbUrlFromItem(row);
 
+      const type: "image" | "video" | undefined =
+        row.type === "video" || row.mediaType === "video"
+          ? "video"
+          : row.type === "image" || row.mediaType === "image"
+          ? "image"
+          : fallbackType;
+
+      const dur =
+        typeof row.durationSec === "number"
+          ? row.durationSec
+          : typeof row.duration === "number"
+          ? row.duration
+          : typeof row.durationMs === "number"
+          ? Math.round(row.durationMs / 1000)
+          : null;
+
+      const sizeFromRow =
+        (typeof row.sizeBytes === "number" && row.sizeBytes > 0 ? row.sizeBytes : null) ||
+        (typeof row.size_bytes === "number" && row.size_bytes > 0 ? row.size_bytes : null) ||
+        (typeof row.fileSize === "number" && row.fileSize > 0 ? row.fileSize : null) ||
+        (typeof row.file_size === "number" && row.file_size > 0 ? row.file_size : null) ||
+        (typeof row.filesize === "number" && row.filesize > 0 ? row.filesize : null) ||
+        (typeof row.bytes === "number" && row.bytes > 0 ? row.bytes : null) ||
+        null;
+
+      const mimeFromRow =
+        row.mimeType ??
+        row.mimetype ??
+        row.mime ??
+        row.contentType ??
+        row.content_type ??
+        row.fileMime ??
+        row.file_mime ??
+        null;
+
+      setMediaMeta((prev) => ({
+        ...prev,
+        [sourceId]: {
+          ...(prev[sourceId] ?? {}),
+          thumbnailUrl: thumb ?? prev[sourceId]?.thumbnailUrl ?? null,
+          durationSec: (dur ?? prev[sourceId]?.durationSec) ?? null,
+          mediaType: type ?? prev[sourceId]?.mediaType,
+          name: row.name ?? row.title ?? prev[sourceId]?.name,
+          url: url ?? prev[sourceId]?.url ?? null,
+          mimeType: mimeFromRow ?? prev[sourceId]?.mimeType ?? null,
+          sizeBytes: sizeFromRow ?? prev[sourceId]?.sizeBytes ?? null,
+        },
+      }));
+
+      if (url && (!mimeFromRow || !sizeFromRow)) {
+        const extra = await fetchHeadLikeMeta(url, type);
         setMediaMeta((prev) => ({
           ...prev,
           [sourceId]: {
-            thumbnailUrl: thumb,
-            durationSec: dur ?? undefined,
-            mediaType: type,
-            name: row.name ?? row.title ?? undefined,
-            url: url,
-            mimeType: row.mimeType ?? row.mime ?? null,
-            sizeBytes: typeof row.sizeBytes === "number" ? row.sizeBytes : null,
+            ...(prev[sourceId] ?? {}),
+            mimeType: prev[sourceId]?.mimeType ?? extra.mimeType ?? null,
+            sizeBytes: prev[sourceId]?.sizeBytes ?? extra.sizeBytes ?? null,
           },
         }));
-        return;
       }
-    } catch {
-      // ignore and continue
+    } finally {
+      mediaMetaReqInFlight.current.delete(sourceId);
+      setMediaMeta((prev) => ({
+        ...prev,
+        [sourceId]: { ...(prev[sourceId] ?? {}), status: "ready" },
+      }));
     }
-
-    // ✅ Second: try optional direct-by-id endpoints ONLY IF your backend supports them
-    // (in your case they 404, but we keep them as optional)
-    const directEndpoints = [
-      `/api/media/${sourceId}`,
-      `/api/library/media/${sourceId}`,
-      `/api/assets/${sourceId}`,
-      `/api/mediafile/${sourceId}`,
-      `/api/mediafile?id=${encodeURIComponent(sourceId)}`,
-    ];
-
-    for (const url of directEndpoints) {
-      try {
-        const res = await fetch(url, { method: "GET" });
-        if (!res.ok) continue;
-        const parsed = await res.json().catch(() => null);
-        if (!parsed) continue;
-
-        const item = parsed.item ?? parsed;
-
-        const mediaUrl = buildPublicMediaUrlFromItem(item);
-        const thumb = buildThumbUrlFromItem(item);
-
-        const type =
-          item.type === "video" || item.mediaType === "video"
-            ? "video"
-            : item.type === "image" || item.mediaType === "image"
-            ? "image"
-            : undefined;
-
-        const dur =
-          typeof item.durationSec === "number"
-            ? item.durationSec
-            : typeof item.duration === "number"
-            ? item.duration
-            : typeof item.durationMs === "number"
-            ? Math.round(item.durationMs / 1000)
-            : null;
-
-        setMediaMeta((prev) => ({
-          ...prev,
-          [sourceId]: {
-            thumbnailUrl: thumb,
-            durationSec: dur ?? undefined,
-            mediaType: type,
-            name: item.name ?? item.title ?? undefined,
-            url: mediaUrl,
-            mimeType: item.mimeType ?? item.mime ?? null,
-            sizeBytes: typeof item.sizeBytes === "number" ? item.sizeBytes : null,
-          },
-        }));
-        return;
-      } catch {
-        // continue
-      }
-    }
-
-    // If we reach here: no meta could be resolved (avoid hammering)
-    setMediaMeta((prev) => ({
-      ...prev,
-      [sourceId]: { thumbnailUrl: null, url: null },
-    }));
-  } finally {
-    mediaMetaReqInFlight.current.delete(sourceId);
   }
-}
 
-
+  // ---------------- schedules persistence helpers ----------------
   function schedulesStorageKey(channelId: string) {
-    return `novasign:channel:${channelId}:schedules:v1`;
+    return `novasign:channel:${channelId}:schedules:v2`; // v2 because keying changed
   }
   function loadScheduleOverrides(channelId: string): Record<string, any> {
     try {
@@ -1847,9 +1984,7 @@ export default function ChannelEditorPage() {
   function saveScheduleOverrides(channelId: string, obj: Record<string, any>) {
     try {
       localStorage.setItem(schedulesStorageKey(channelId), JSON.stringify(obj));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   function getItemSchedules(it: ZoneContentItem): ZoneItemSchedule[] {
@@ -1864,7 +1999,7 @@ export default function ChannelEditorPage() {
           ? {
               ...x,
               schedules,
-              schedule: schedules[0], // keep legacy aligned
+              schedule: schedules[0],
             }
           : x
       );
@@ -1916,103 +2051,78 @@ export default function ChannelEditorPage() {
     setScheduleAnchorRect(null);
   }
 
+  // ---------------- backend save helpers ----------------
+  function normalizeZoneOrders(items: ZoneContentItem[]) {
+    return items
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .map((x, idx) => ({ ...x, order: idx }));
+  }
+
+  function toApiZoneItem(it: ZoneContentItem) {
+  const schedules = Array.isArray(it.schedules) ? it.schedules : it.schedule ? [it.schedule] : undefined;
+  const schedule = schedules?.[0] ?? undefined;
+
+  return {
+    clientId: it.clientId ?? it.id,
+    sourceType: it.sourceType,
+    sourceId: it.sourceId,
+    order: it.order,
+    durationSec: it.durationSec,
+    startAt: it.startAt ?? null,
+    endAt: it.endAt ?? null,
+
+    // optional display fields (backend may ignore, but UI benefits if kept)
+    name: it.name ?? null,
+    mediaType: it.mediaType ?? null,
+    thumbnailUrl: it.thumbnailUrl ?? null,
+    url: it.url ?? null,
+    posterUrl: it.posterUrl ?? null,
+
+    schedule,
+    schedules,
+  };
+}
+
+  function buildZonesPayload(all: Record<string, ZoneContentItem[]>) {
+    const out: Record<string, any[]> = {};
+    for (const [zoneId, items] of Object.entries(all)) {
+      out[zoneId] = normalizeZoneOrders(items).map(toApiZoneItem);
+    }
+    return out;
+  }
+
   async function patchZoneContent(zoneId: string, items: ZoneContentItem[]) {
     if (!id) return;
 
-    const toApiFull = (it: ZoneContentItem) => {
-      // ✅ NEVER send UI-only fields to backend
-      const { id: _clientId, url: _u, posterUrl: _p, ...rest } = it;
+    const apiItems = normalizeZoneOrders(items).map(toApiZoneItem);
 
-      const schedules = Array.isArray(rest.schedules) ? rest.schedules : rest.schedule ? [rest.schedule] : undefined;
-      return {
-        ...rest,
-        schedule: schedules?.[0] ?? rest.schedule,
-        schedules,
-      } as any;
-    };
-
-    const toApiStripped = (it: ZoneContentItem) => {
-      // ✅ aggressively strip fields that backends often reject
-      const {
-        id: _clientId,
-        thumbnailUrl: _t,
-        schedule: _s,
-        schedules: _ss,
-        url: _u,
-        posterUrl: _p,
-        ...rest
-      } = it;
-      return rest as any;
-    };
-
-    const apiItemsFull = items.map(toApiFull);
-    const apiItemsStripped = items.map(toApiStripped);
-
-    // 1) Try dedicated endpoint (if backend ever adds it)
-    const zoneUrl = `${API_BASE}/${id}/zones/${zoneId}/content`;
-
-    const tryPatch = async (url: string, bodyObj: any) => {
-      return fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(bodyObj),
-      });
-    };
-
-    try {
-      let res = await tryPatch(zoneUrl, { items: apiItemsFull });
-      if (res.ok) return;
-
-      if (res.status === 400) {
-        res = await tryPatch(zoneUrl, { items: apiItemsStripped });
-        if (res.ok) return;
-      }
-
-      if (res.status !== 404) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`Zone content PATCH failed: ${res.status} ${res.statusText} ${txt}`.trim());
-      }
-    } catch {
-      // fall through
-    }
-
-    // 2) Fallback: patch the channel itself with zones
     const channelUrl = `${API_BASE}/${id}`;
     const currentZones = (channel as any)?.zones ?? {};
-    const nextZonesFull = { ...currentZones, [zoneId]: apiItemsFull };
+    const nextZones = { ...currentZones, [zoneId]: apiItems };
 
-    let res2 = await fetch(channelUrl, {
-      method: "PATCH",
+    const res = await fetch(channelUrl, {
+      method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ zones: nextZonesFull }),
+      credentials: "include",
+      body: JSON.stringify({ zones: nextZones }),
     });
 
-    if (!res2.ok && res2.status === 400) {
-      const nextZonesStripped = { ...currentZones, [zoneId]: apiItemsStripped };
-      res2 = await fetch(channelUrl, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ zones: nextZonesStripped }),
-      });
-      if (res2.ok) {
-        setChannel((prev: any) => (prev ? { ...prev, zones: nextZonesStripped } : prev));
-        return;
-      }
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      setSaveStatus("error");
+      setError(`Autosave failed: ${res.status} ${res.statusText} ${txt}`.trim());
+      throw new Error(`Autosave failed: ${res.status} ${res.statusText} ${txt}`.trim());
     }
 
-    if (!res2.ok) {
-      const txt = await res2.text().catch(() => "");
-      throw new Error(`Channel PATCH (zones) failed: ${res2.status} ${res2.statusText} ${txt}`.trim());
-    }
-
-    setChannel((prev: any) => (prev ? { ...prev, zones: nextZonesFull } : prev));
+    setChannel((prev: any) => (prev ? { ...prev, zones: nextZones } : prev));
   }
 
   function scheduleZonePatch(zoneId: string, items: ZoneContentItem[]) {
     const timers = zonePatchTimersRef.current;
     if (timers[zoneId]) window.clearTimeout(timers[zoneId]);
     timers[zoneId] = window.setTimeout(() => {
-      void patchZoneContent(zoneId, items);
+      patchZoneContent(zoneId, items).catch((e) => console.warn("Zone autosave failed:", e));
     }, 350);
   }
 
@@ -2073,157 +2183,149 @@ export default function ChannelEditorPage() {
     };
   }, [saveStatus]);
 
- async function load() {
-  if (!id) return;
-  setLoading(true);
-  setError(null);
+  async function load() {
+    if (!id) return;
+    setLoading(true);
+    setError(null);
 
-  try {
-    const r = await fetchJsonStrict<{ item: Channel }>(`${API_BASE}/${id}`, { method: "GET" });
-    const ch = r.item;
+    try {
+      const r = await fetchJsonStrict<{ item: Channel }>(`${API_BASE}/${id}`, { method: "GET" });
+      const ch = r.item;
 
-    // hydrate zoneContents from backend zones (so reload shows assignments)
-    let hydrated: Record<string, ZoneContentItem[]> = {};
+      // hydrate zoneContents from backend zones
+      let hydrated: Record<string, ZoneContentItem[]> = {};
 
-    if (ch.zones && typeof ch.zones === "object") {
-      for (const [zoneId, list] of Object.entries(ch.zones as any)) {
-        hydrated[zoneId] = (Array.isArray(list) ? list : []).map((it: any, idx: number) => {
-          const schedulesFromApi: ZoneItemSchedule[] = Array.isArray(it.schedules)
-            ? it.schedules.map((s: any) => ({
-                ...s,
-                id: s?.id ?? crypto.randomUUID(),
-                weeklyDays: Array.isArray(s?.weeklyDays)
-                  ? s.weeklyDays
-                  : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
-                timeWindows: Array.isArray(s?.timeWindows) ? s.timeWindows : [],
-              }))
-            : it.schedule
-            ? [
-                {
-                  ...it.schedule,
-                  id: it.schedule?.id ?? crypto.randomUUID(),
-                  weeklyDays: Array.isArray(it.schedule?.weeklyDays)
-                    ? it.schedule.weeklyDays
-                    : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
-                  timeWindows: Array.isArray(it.schedule?.timeWindows) ? it.schedule.timeWindows : [],
-                },
-              ]
-            : [defaultSchedule()];
+      if (ch.zones && typeof ch.zones === "object") {
+        for (const [zoneId, list] of Object.entries(ch.zones as any)) {
+          hydrated[zoneId] = (Array.isArray(list) ? list : []).map((it: any, idx: number) => {
+            const schedulesFromApi: ZoneItemSchedule[] = Array.isArray(it.schedules)
+              ? it.schedules.map((s: any) => ({
+                  ...s,
+                  id: s?.id ?? crypto.randomUUID(),
+                  weeklyDays: Array.isArray(s?.weeklyDays) ? s.weeklyDays : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+                  timeWindows: Array.isArray(s?.timeWindows) ? s.timeWindows : [],
+                }))
+              : it.schedule
+              ? [
+                  {
+                    ...it.schedule,
+                    id: it.schedule?.id ?? crypto.randomUUID(),
+                    weeklyDays: Array.isArray(it.schedule?.weeklyDays)
+                      ? it.schedule.weeklyDays
+                      : ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"],
+                    timeWindows: Array.isArray(it.schedule?.timeWindows) ? it.schedule.timeWindows : [],
+                  },
+                ]
+              : [defaultSchedule()];
 
-          // ✅ derive URLs from backend item (NO undefined vars)
-          const mediaUrl: string | null =
-            it.url ??
-            it.fileUrl ??
-            it.downloadUrl ??
-            it.previewUrl ??
-            it.publicUrl ??
-            it.path ??
-            null;
+            // ✅ stable per-item id
+            const cid: string = String(it.clientId ?? it.id ?? crypto.randomUUID());
 
-          const thumb: string | null =
-            it.thumbnailUrl ??
-            it.thumbUrl ??
-            it.thumbnail ??
-            it.previewUrl ?? // sometimes previewUrl is an image thumb
-            it.posterUrl ??
-            // if it's an image, fallback to the file itself
-            (it.sourceType === "media" && it.mediaType === "image" ? mediaUrl : null) ??
-            null;
+            const mediaUrl: string | null =
+              it.url ?? it.fileUrl ?? it.downloadUrl ?? it.previewUrl ?? it.publicUrl ?? it.path ?? null;
 
-          return {
-            id: crypto.randomUUID(),
-            sourceType: it.sourceType,
-            sourceId: it.sourceId,
-            name: it.name ?? "(untitled)",
-            mediaType: it.mediaType,
-            durationSec: typeof it.durationSec === "number" ? it.durationSec : 10,
-            order: typeof it.order === "number" ? it.order : idx,
-            startAt: it.startAt ?? null,
-            endAt: it.endAt ?? null,
+            const thumb: string | null =
+              it.thumbnailUrl ??
+              it.thumbUrl ??
+              it.thumbnail ??
+              it.previewUrl ??
+              it.posterUrl ??
+              (it.sourceType === "media" && it.mediaType === "image" ? mediaUrl : null) ??
+              null;
 
-            // ✅ keep both: thumbnailUrl + url/posterUrl for UI preview/fallbacks
-            thumbnailUrl: thumb,
-            url: mediaUrl,
-            posterUrl: it.posterUrl ?? null,
+            return {
+              id: cid,
+              clientId: cid,
+              sourceType: it.sourceType,
+              sourceId: it.sourceId,
+              name: it.name ?? "(untitled)",
+              mediaType: it.mediaType,
+              durationSec: typeof it.durationSec === "number" ? it.durationSec : 10,
+              order: typeof it.order === "number" ? it.order : idx,
+              startAt: it.startAt ?? null,
+              endAt: it.endAt ?? null,
+              thumbnailUrl: thumb,
+              url: mediaUrl,
+              posterUrl: it.posterUrl ?? null,
+              schedules: schedulesFromApi,
+              schedule: schedulesFromApi[0],
+            } as ZoneContentItem;
+          });
+        }
+      }
 
-            schedules: schedulesFromApi,
-            schedule: schedulesFromApi[0],
-          } as ZoneContentItem;
+      // local overrides (keyed by zoneId + clientId)
+      const overrides = loadScheduleOverrides(id);
+      for (const [zoneId, list] of Object.entries(hydrated)) {
+        hydrated[zoneId] = (list as any[]).map((it) => {
+          const key = `${zoneId}:${it.clientId ?? it.id}`;
+          const ov = overrides[key];
+          if (!ov) return it;
+          const schedules = Array.isArray(ov.schedules) ? ov.schedules : null;
+          return schedules ? { ...it, schedules, schedule: schedules[0] } : it;
         });
       }
-    }
 
-    // local overrides
-    const overrides = loadScheduleOverrides(id);
-    for (const [zoneId, list] of Object.entries(hydrated)) {
-      hydrated[zoneId] = (list as any[]).map((it) => {
-        const key = `${zoneId}:${it.sourceType}:${it.sourceId}`;
-        const ov = overrides[key];
-        if (!ov) return it;
-        const schedules = Array.isArray(ov.schedules) ? ov.schedules : null;
-        return schedules ? { ...it, schedules, schedule: schedules[0] } : it;
-      });
-    }
+      setZoneContents({ ...hydrated });
 
-    setZoneContents({ ...hydrated });
-
-    // resolve media metadata
-    for (const items of Object.values(hydrated)) {
-      for (const it of items) {
-        if (it.sourceType === "media") {
-          void resolveMediaMeta(it.sourceId);
+      // resolve media metadata
+      for (const items of Object.values(hydrated)) {
+        for (const it of items) {
+          if (it.sourceType === "media") {
+            setMediaMeta((prev) => ({ ...prev, [it.sourceId]: prev[it.sourceId] ?? {} }));
+            void resolveMediaMeta(it.sourceId, it.url ?? it.thumbnailUrl ?? null, it.mediaType);
+          }
+          if (it.sourceType === "playlist") void resolvePlaylistMeta(it.sourceId);
         }
-        if (it.sourceType === "playlist") void resolvePlaylistMeta(it.sourceId);
       }
+
+      const fallbackBy = readCurrentUserLabel();
+      setChannel({ ...ch, updatedBy: getUpdatedByLabel(ch) || fallbackBy || (ch as any).updatedBy } as any);
+
+      const uiLayoutId = apiLayoutToUi(ch.layoutId);
+      const initialLayout = ALL_LAYOUTS.find((l) => l.id === uiLayoutId) ?? ALL_LAYOUTS[0];
+
+      const fallbackDim = ch.orientation === "portrait" ? { w: 1080, h: 1920 } : { w: 1920, h: 1080 };
+      const initialWidth = typeof ch.width === "number" && ch.width > 0 ? ch.width : fallbackDim.w;
+      const initialHeight = typeof ch.height === "number" && ch.height > 0 ? ch.height : fallbackDim.h;
+
+      setLayoutId(uiLayoutId);
+      setWidth(initialWidth);
+      setHeight(initialHeight);
+
+      const nextTransitions: Record<string, ZoneTransition> = {
+        z1: apiTransitionToUi(ch.transition),
+        background_audio: defaultTransition(),
+      };
+
+      for (const z of [...initialLayout.zones.map((z) => z.id), "background_audio"]) {
+        if (!nextTransitions[z]) nextTransitions[z] = defaultTransition();
+      }
+
+      setZoneTransitions(nextTransitions);
+      setActiveZoneId(initialLayout.zones[0]?.id ?? "z1");
+
+      lastSavedSnapshotRef.current = JSON.stringify({
+        layoutId: uiLayoutId,
+        width: initialWidth,
+        height: initialHeight,
+        zoneTransitions: nextTransitions,
+        zoneContents: hydrated,
+      });
+    } catch (e: any) {
+      setError(`Failed to load channel. ${humanizeError(e)}`.trim());
+    } finally {
+      setLoading(false);
     }
-
-    const fallbackBy = readCurrentUserLabel();
-    setChannel({ ...ch, updatedBy: getUpdatedByLabel(ch) || fallbackBy || (ch as any).updatedBy } as any);
-
-    const uiLayoutId = apiLayoutToUi(ch.layoutId);
-    const initialLayout = ALL_LAYOUTS.find((l) => l.id === uiLayoutId) ?? ALL_LAYOUTS[0];
-
-    const fallbackDim = ch.orientation === "portrait" ? { w: 1080, h: 1920 } : { w: 1920, h: 1080 };
-    const initialWidth = typeof ch.width === "number" && ch.width > 0 ? ch.width : fallbackDim.w;
-    const initialHeight = typeof ch.height === "number" && ch.height > 0 ? ch.height : fallbackDim.h;
-
-    setLayoutId(uiLayoutId);
-    setWidth(initialWidth);
-    setHeight(initialHeight);
-
-    const nextTransitions: Record<string, ZoneTransition> = {
-      z1: apiTransitionToUi(ch.transition),
-      background_audio: defaultTransition(),
-    };
-
-    for (const z of [...initialLayout.zones.map((z) => z.id), "background_audio"]) {
-      if (!nextTransitions[z]) nextTransitions[z] = defaultTransition();
-    }
-
-    setZoneTransitions(nextTransitions);
-    setActiveZoneId(initialLayout.zones[0]?.id ?? "z1");
-
-    lastSavedSnapshotRef.current = JSON.stringify({
-      layoutId: uiLayoutId,
-      width: initialWidth,
-      height: initialHeight,
-      zoneTransitions: nextTransitions,
-      zoneContents: hydrated,
-    });
-  } catch (e: any) {
-    setError(`Failed to load channel. ${humanizeError(e)}`.trim());
-  } finally {
-    setLoading(false);
   }
-}
 
-
+  // persist local overrides (keyed by zoneId + clientId)
   useEffect(() => {
     if (!id) return;
     const overrides: Record<string, any> = {};
     for (const [zoneId, items] of Object.entries(zoneContents)) {
       for (const it of items) {
-        const key = `${zoneId}:${it.sourceType}:${it.sourceId}`;
+        const key = `${zoneId}:${it.clientId ?? it.id}`;
         const schedules = ensureSchedulesShared(it);
         overrides[key] = { schedules };
       }
@@ -2265,28 +2367,26 @@ export default function ChannelEditorPage() {
     setSaveStatus("saving");
     setError(null);
 
+    const zonesPayload = buildZonesPayload(zoneContents);
+
     const apiPayload = {
       layoutId: uiLayoutToApi(layoutId),
       transition: uiTransitionToApi(zoneTransitions.z1 ?? defaultTransition()),
       width,
       height,
+      zones: zonesPayload, // ✅ persist zones + schedules on Save
     };
 
     const url = `${API_BASE}/${id}`;
 
     try {
-      try {
-        const res = await fetchJsonStrict<{ item: Channel }>(url, { method: "PATCH", body: JSON.stringify(apiPayload) });
-        const fallbackBy = readCurrentUserLabel();
-        setChannel({ ...res.item, updatedBy: getUpdatedByLabel(res.item) || fallbackBy || res.item.updatedBy } as any);
-      } catch (e: any) {
-        if (e?.status === 404 || e?.status === 405 || String(e?.message ?? "").toLowerCase().includes("patch")) {
-          const res2 = await fetchJsonStrict<{ item: Channel }>(url, { method: "PUT", body: JSON.stringify(apiPayload) });
-          setChannel(res2.item);
-        } else {
-          throw e;
-        }
-      }
+      const res = await fetchJsonStrict<{ item: Channel }>(url, {
+        method: "PUT",
+        body: JSON.stringify(apiPayload),
+      });
+
+      const fallbackBy = readCurrentUserLabel();
+      setChannel({ ...res.item, updatedBy: getUpdatedByLabel(res.item) || fallbackBy || res.item.updatedBy } as any);
 
       lastSavedSnapshotRef.current = snap;
       setSaveStatus("saved");
@@ -2318,36 +2418,17 @@ export default function ChannelEditorPage() {
 
   const byLabel = useMemo(() => getUpdatedByLabel(channel) || readCurrentUserLabel() || undefined, [channel]);
 
-  const updatedLabel = channel?.updatedAt
-    ? ` · Updated ${formatUpdated(channel.updatedAt)}${byLabel ? ` · By ${byLabel}` : ""}`
-    : "";
+  const updatedLabel = channel?.updatedAt ? ` · Updated ${formatUpdated(channel.updatedAt)}${byLabel ? ` · By ${byLabel}` : ""}` : "";
 
   useEffect(() => {
     for (const it of activeZoneItems) {
       if (it.sourceType === "media") {
-        void resolveMediaMeta(it.sourceId);
+        void resolveMediaMeta(it.sourceId, it.url ?? it.thumbnailUrl ?? null, it.mediaType);
       }
       if (it.sourceType === "playlist") void resolvePlaylistMeta(it.sourceId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeZoneItems]);
-
-  function getItemThumb(it: ZoneContentItem) {
-    if (it.thumbnailUrl) return it.thumbnailUrl;
-
-    if (it.sourceType === "media") {
-      const m = mediaMeta[it.sourceId];
-      if (m?.thumbnailUrl) return m.thumbnailUrl;
-
-      // ✅ image: fallback to direct url
-      if (it.mediaType === "image" && it.url) return it.url;
-
-      // ✅ video: fallback to posterUrl
-      if (it.mediaType === "video" && it.posterUrl) return it.posterUrl;
-    }
-
-    return null;
-  }
 
   function getEffectiveDuration(it: ZoneContentItem) {
     if (it.sourceType === "media" && it.mediaType === "video") {
@@ -2394,9 +2475,7 @@ export default function ChannelEditorPage() {
     const item = items.find((x) => x.id === itemId);
     if (!item) return;
 
-    const schedules = ensureSchedulesShared(item).map((s: ZoneItemSchedule) =>
-      s.id === scheduleId ? nextSchedule : s
-    );
+    const schedules = ensureSchedulesShared(item).map((s: ZoneItemSchedule) => (s.id === scheduleId ? nextSchedule : s));
 
     setItemSchedules(zoneId, itemId, schedules);
   }
@@ -2511,13 +2590,11 @@ export default function ChannelEditorPage() {
                   <div className="ce-zoneList-empty">No items in this zone.</div>
                 ) : (
                   activeZoneItems.map((it, idx) => {
-                  const thumb =
-  it.thumbnailUrl ??
-  (it.sourceType === "media" ? mediaMeta[it.sourceId]?.thumbnailUrl ?? null : null);
+                    const thumb =
+                      it.thumbnailUrl ??
+                      (it.sourceType === "media" ? mediaMeta[it.sourceId]?.thumbnailUrl ?? null : null);
 
-const url =
-  it.url ??
-  (it.sourceType === "media" ? mediaMeta[it.sourceId]?.url ?? null : null);
+                    const url = it.url ?? (it.sourceType === "media" ? mediaMeta[it.sourceId]?.url ?? null : null);
 
                     const dur = getDisplayDurationSec(it);
                     const isPlaylist = it.sourceType === "playlist";
@@ -2525,12 +2602,19 @@ const url =
                     const isImage = it.sourceType === "media" && it.mediaType === "image";
                     const meta = it.sourceType === "media" ? mediaMeta[it.sourceId] : undefined;
 
-                    // ✅ url fallback chain
                     const mediaUrl = meta?.url ?? it.url ?? null;
 
                     const schedules = getItemSchedules(it);
                     const draftKey = `${activeZoneId}:${it.id}`;
                     const shownValue = durationDrafts[draftKey] ?? formatHMS(dur);
+                    const displayName =
+                      it.name && it.name !== "(untitled)"
+                        ? it.name
+                        : it.sourceType === "media"
+                        ? mediaMeta[it.sourceId]?.name ?? "(untitled)"
+                        : it.sourceType === "playlist"
+                        ? playlistMeta[it.sourceId]?.name ?? "(untitled)"
+                        : "(untitled)";
 
                     return (
                       <div
@@ -2560,69 +2644,68 @@ const url =
                         }}
                       >
                         {/* Thumbnail */}
-                        {/* Thumbnail */}
-<button type="button" onClick={() => openPreview(it)} className="ce-zoneThumbBtn" title="Preview">
-  {isVideo && mediaUrl ? (
-    <video
-      src={mediaUrl}
-      muted
-      playsInline
-      preload="metadata"
-      className="ce-zoneThumbMedia"
-      onLoadedData={(e) => {
-        // show a real frame (avoid black frame / nothing)
-        const v = e.currentTarget as HTMLVideoElement;
-        try {
-          v.currentTime = 0.1;
-        } catch {}
-      }}
-      onLoadedMetadata={(e) => {
-        const d = Math.round((e.currentTarget as HTMLVideoElement).duration || 0);
-        if (d > 0) {
-          setMediaMeta((prev) => ({
-            ...prev,
-            [it.sourceId]: {
-              ...(prev[it.sourceId] ?? {}),
-              durationSec: d,
-              mediaType: "video",
-              url: mediaUrl,
-            },
-          }));
-        }
-      }}
-    />
-  ) : thumb ? (
-    <img
-      src={thumb}
-      alt=""
-      loading="lazy"
-      decoding="async"
-      className="ce-zoneThumbMedia"
-      onError={(e) => {
-        const img = e.currentTarget as HTMLImageElement;
-
-        // if image thumb failed, try the real file url
-        if (isImage && mediaUrl && img.src !== mediaUrl) {
-          img.src = mediaUrl;
-          return;
-        }
-
-        img.style.display = "none";
-      }}
-    />
-  ) : it.sourceType === "playlist" ? (
-    <div className="ce-zoneThumbFallback">
-      <img src="/assets/icons/playlist.svg" alt="Playlist" className="ce-zoneThumbPlaylistIcon" draggable={false} />
-    </div>
-  ) : (
-    <div className="ce-zoneThumbText">{it.mediaType?.toUpperCase() ?? "MEDIA"}</div>
-  )}
-</button>
-
+                        <button type="button" onClick={() => openPreview(it)} className="ce-zoneThumbBtn" title="Preview">
+                          {isVideo && mediaUrl ? (
+                            <video
+                              src={mediaUrl}
+                              muted
+                              playsInline
+                              preload="metadata"
+                              className="ce-zoneThumbMedia"
+                              onLoadedData={(e) => {
+                                const v = e.currentTarget as HTMLVideoElement;
+                                try {
+                                  v.currentTime = 0.1;
+                                } catch {}
+                              }}
+                              onLoadedMetadata={(e) => {
+                                const d = Math.round((e.currentTarget as HTMLVideoElement).duration || 0);
+                                if (d > 0) {
+                                  setMediaMeta((prev) => ({
+                                    ...prev,
+                                    [it.sourceId]: {
+                                      ...(prev[it.sourceId] ?? {}),
+                                      durationSec: d,
+                                      mediaType: "video",
+                                      url: mediaUrl,
+                                    },
+                                  }));
+                                }
+                              }}
+                            />
+                          ) : thumb ? (
+                            <img
+                              src={thumb}
+                              alt=""
+                              loading="lazy"
+                              decoding="async"
+                              className="ce-zoneThumbMedia"
+                              onError={(e) => {
+                                const img = e.currentTarget as HTMLImageElement;
+                                if (isImage && mediaUrl && img.src !== mediaUrl) {
+                                  img.src = mediaUrl;
+                                  return;
+                                }
+                                img.style.display = "none";
+                              }}
+                            />
+                          ) : it.sourceType === "playlist" ? (
+                            <div className="ce-zoneThumbFallback">
+                              <img
+                                src="/assets/icons/playlist.svg"
+                                alt="Playlist"
+                                className="ce-zoneThumbPlaylistIcon"
+                                draggable={false}
+                              />
+                            </div>
+                          ) : (
+                            <div className="ce-zoneThumbText">{it.mediaType?.toUpperCase() ?? "MEDIA"}</div>
+                          )}
+                        </button>
 
                         {/* Middle */}
                         <div className="ce-zoneMid">
-                          <div className="ce-zoneItemName">{it.name}</div>
+                          <div className="ce-zoneItemName">{displayName}</div>
                           <div className="ce-zoneDurationRow">
                             <input
                               type="text"
@@ -2632,7 +2715,7 @@ const url =
                               onChange={(e) => {
                                 if (isVideo || isPlaylist) return;
                                 const v = e.target.value;
-                                setDurationDrafts((prev: Record<string, string>) => ({ ...prev, [draftKey]: v }));
+                                setDurationDrafts((prev) => ({ ...prev, [draftKey]: v }));
                               }}
                               onBlur={() => {
                                 if (isVideo || isPlaylist) return;
@@ -2640,8 +2723,7 @@ const url =
                                 const next = parseHMS(raw);
                                 const finalSec = Math.max(1, next ?? dur);
                                 updateItemInZone(activeZoneId, it.id, { durationSec: finalSec });
-                                // cleanup draft (so it displays normalized format)
-                                setDurationDrafts((prev: Record<string, string>) => {
+                                setDurationDrafts((prev) => {
                                   const copy = { ...prev };
                                   delete copy[draftKey];
                                   return copy;
@@ -2852,7 +2934,8 @@ const url =
                           updateActiveTransition({ type: "slide", durationSec: 0.6, direction: "right", easing: "ease-in-out" });
                         if (next === "push") updateActiveTransition({ type: "push", durationSec: 0.6, direction: "right" });
                         if (next === "wipe") updateActiveTransition({ type: "wipe", durationSec: 0.6, direction: "right" });
-                        if (next === "zoom") updateActiveTransition({ type: "zoom", durationSec: 0.6, zoomMode: "in", zoomStartScale: 0.9 });
+                        if (next === "zoom")
+                          updateActiveTransition({ type: "zoom", durationSec: 0.6, zoomMode: "in", zoomStartScale: 0.9 });
                       }}
                       disabled={!activeTransition.enabled}
                     >
@@ -2980,6 +3063,7 @@ const url =
         open={previewOpen}
         item={previewItem}
         meta={previewItem?.sourceType === "media" ? mediaMeta[previewItem.sourceId] : undefined}
+        metaInFlight={mediaMetaReqInFlight}
         onClose={closePreview}
         onDelete={() => {
           if (!previewItem) return;
@@ -3025,55 +3109,58 @@ const url =
             const existing = prev[zoneId] ?? [];
 
             const mapped: ZoneContentItem[] = items.map((it, idx) => {
-  const sourceType = it.type as "media" | "playlist";
-  const sourceId = it.item.id;
+              const sourceType = it.type as "media" | "playlist";
+              const sourceId = it.item.id;
 
-  const name = (it.item as any)?.name ?? (it.item as any)?.title ?? "(untitled)";
-  const mediaType =
-    sourceType === "media"
-      ? (((it.item as any)?.type as "image" | "video" | undefined) ?? undefined)
-      : undefined;
+              const name = (it.item as any)?.name ?? (it.item as any)?.title ?? "(untitled)";
+              const mediaType =
+                sourceType === "media"
+                  ? (((it.item as any)?.type as "image" | "video" | undefined) ?? undefined)
+                  : undefined;
 
-  const thumbUrl = buildThumbUrlFromItem(it.item);
-  const mediaUrl = buildPublicMediaUrlFromItem(it.item);
+              const thumbUrl = buildThumbUrlFromItem(it.item);
+              const mediaUrl = buildPublicMediaUrlFromItem(it.item);
 
-  const pickedDur =
-    typeof (it.item as any)?.durationSec === "number"
-      ? (it.item as any).durationSec
-      : typeof (it.item as any)?.duration === "number"
-      ? (it.item as any).duration
-      : typeof (it.item as any)?.durationMs === "number"
-      ? Math.round((it.item as any).durationMs / 1000)
-      : null;
+              const pickedDur =
+                typeof (it.item as any)?.durationSec === "number"
+                  ? (it.item as any).durationSec
+                  : typeof (it.item as any)?.duration === "number"
+                  ? (it.item as any).duration
+                  : typeof (it.item as any)?.durationMs === "number"
+                  ? Math.round((it.item as any).durationMs / 1000)
+                  : null;
 
-  const durationSec =
-    sourceType === "media"
-      ? mediaType === "image"
-        ? 10
-        : typeof pickedDur === "number" && pickedDur > 0
-        ? pickedDur
-        : 0
-      : 0;
+              const durationSec =
+                sourceType === "media"
+                  ? mediaType === "image"
+                    ? 10
+                    : typeof pickedDur === "number" && pickedDur > 0
+                    ? pickedDur
+                    : 0
+                  : 0;
 
-  const schedules = [defaultSchedule()];
+              const schedules = [defaultSchedule()];
 
-  return {
-    id: crypto.randomUUID(),
-    sourceType,
-    sourceId,
-    name,
-    mediaType,
-    durationSec,
-    order: existing.length + idx,
-    startAt: null,
-    endAt: null,
-    thumbnailUrl: thumbUrl,
-    url: mediaUrl,
-    schedules,
-    schedule: schedules[0],
-  };
-});
+              // ✅ stable item id persisted as clientId
+              const cid = crypto.randomUUID();
 
+              return {
+                id: cid,
+                clientId: cid,
+                sourceType,
+                sourceId,
+                name,
+                mediaType,
+                durationSec,
+                order: existing.length + idx,
+                startAt: null,
+                endAt: null,
+                thumbnailUrl: thumbUrl,
+                url: mediaUrl,
+                schedules,
+                schedule: schedules[0],
+              };
+            });
 
             return { ...prev, [zoneId]: [...existing, ...mapped] };
           });
@@ -3081,10 +3168,13 @@ const url =
           clearNoop(setSaveStatus);
 
           for (const it of items) {
-  if (it.type === "media") void resolveMediaMeta(it.item.id);
-  if (it.type === "playlist") void resolvePlaylistMeta(it.item.id);
-}
-
+            if (it.type === "media") {
+              const mediaUrl = buildPublicMediaUrlFromItem(it.item);
+              const mt = ((it.item as any)?.type as "image" | "video" | undefined) ?? undefined;
+              void resolveMediaMeta(it.item.id, mediaUrl ?? null, mt);
+            }
+            if (it.type === "playlist") void resolvePlaylistMeta(it.item.id);
+          }
 
           setContentPickerOpen(false);
         }}

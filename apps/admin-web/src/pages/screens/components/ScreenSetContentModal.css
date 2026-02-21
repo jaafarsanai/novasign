@@ -1,0 +1,404 @@
+/* =========================
+   BACKDROP
+========================= */
+.scp-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.55);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+}
+
+/* =========================
+   MODAL
+========================= */
+.scp-modal {
+  width: min(1100px, calc(100vw - 36px));
+  height: min(720px, calc(100vh - 36px));
+  background: #fff;
+  border-radius: 14px;
+  border: 1px solid #e8eef5;
+  box-shadow: 0 18px 60px rgba(16, 24, 40, 0.24);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+
+  min-width: 0;
+}
+
+/* =========================
+   HEADER
+========================= */
+.scp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid #edf2f7;
+}
+
+.scp-title {
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.scp-close {
+  border: 1px solid #e4e9f0;
+  background: #fff;
+  border-radius: 10px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.scp-close:hover {
+  background: #f6f8fb;
+}
+
+/* =========================
+   BODY LAYOUT
+========================= */
+.scp-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* =========================
+   SIDEBAR
+========================= */
+.scp-nav {
+  border-right: 1px solid #edf2f7;
+  padding: 10px;
+  background: #fbfcfe;
+}
+
+.scp-nav-item {
+  width: 100%;
+  border: none;
+  background: transparent;
+  border-radius: 12px;
+  padding: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.scp-nav-item:hover {
+  background: #f6f8fb;
+}
+
+.scp-nav-item.is-active {
+  background: #eef3ff;
+  font-weight: 650;
+}
+
+/* =========================
+   MAIN AREA
+========================= */
+.scp-main {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+/* =========================
+   TOOLBAR
+========================= */
+.scp-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #e4e9f0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+.scp-toolbar input {
+  border: none;
+  outline: none;
+  width: 100%;
+}
+
+/* =========================
+   LIST
+========================= */
+.scp-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border: 1px solid #edf2f7;
+  border-radius: 14px;
+  min-width: 0;
+}
+
+.scp-list::-webkit-scrollbar:horizontal {
+  height: 0;
+}
+
+.scp-empty {
+  padding: 20px;
+  color: #64748b;
+}
+
+.scp-row {
+  display: grid;
+  grid-template-columns: 1fr 90px 40px;
+  gap: 10px;
+  padding: 10px;
+  border-bottom: 1px solid #f1f4f8;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.scp-row:hover {
+  background: #fbfcfe;
+}
+
+.scp-row.is-selected {
+  background: #eef3ff;
+}
+
+.scp-row-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.scp-name,
+.scp-meta,
+.scp-kind {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scp-name {
+  font-weight: 600;
+}
+
+.scp-meta {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.scp-kind,
+.scp-sel {
+  text-align: right;
+}
+
+.scp-sel {
+  color: #2563eb;
+}
+
+/* =========================
+   THUMB
+========================= */
+.scp-thumb {
+  width: 46px;
+  height: 46px;
+  border-radius: 12px;
+  background: #f3f6fb;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scp-thumb img,
+.scp-thumb video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.scp-thumb-folder,
+.scp-thumb-channel {
+  background: #f6f8fb;
+}
+
+.scp-thumb-fallback {
+  font-size: 12px;
+  color: #64748b;
+}
+
+/* =========================
+   FOOTER
+========================= */
+.scp-footer {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.scp-selected {
+  font-size: 13px;
+}
+
+.scp-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.scp-btn {
+  border: 1px solid #e4e9f0;
+  background: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.scp-btn-yellow {
+  background: #f5c542;
+  border-color: #f5c542;
+  font-weight: 650;
+}
+
+/* =========================
+   MEDIA GRID
+========================= */
+.scp-media-grid {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Folders Panel */
+.scp-folders {
+  border: 1px solid #eef0f5;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.scp-folders-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border-bottom: 1px solid #eef0f5;
+}
+
+.scp-folder-back {
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  border: 1px solid #eef0f5;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scp-folder-back:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.scp-breadcrumbs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.scp-crumb {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid #eef0f5;
+  background: #f8fafc;
+  font-size: 12px;
+}
+
+.scp-crumb.is-active {
+  background: #fff;
+  border-color: #e6e9f2;
+  font-weight: 600;
+}
+
+.scp-folders-label {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: #6b7280;
+}
+
+.scp-folders-list {
+  flex: 1;
+  padding: 6px;
+  overflow: auto;
+  min-height: 0;
+}
+
+.scp-folder-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.scp-folder-row:hover {
+  background: #f6f7fb;
+}
+
+.scp-folder-ico {
+  width: 28px;
+  height: 28px;
+  border-radius: 10px;
+  background: #f3f4f6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.scp-folder-name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.scp-folder-kind {
+  font-size: 12px;
+  color: #6b7280;
+}
+
+/* Files Panel */
+.scp-media-files {
+  border: 1px solid #eef0f5;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  min-width: 0;
+}
+
+.scp-media-files .scp-list {
+  border: 0;
+  border-radius: 0;
+}

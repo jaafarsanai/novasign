@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,88 +10,101 @@ datasource db {
 }
 
 model Screen {
-  id                 String            @id @default(cuid())
-  name               String?
-  lastSeenAt         DateTime?
-  createdAt          DateTime          @default(now())
-  updatedAt          DateTime          @updatedAt
-  pairingCode        String            @unique
+  id         String   @id @default(cuid())
+  name       String?
+  lastSeenAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  pairingCode String @unique
+
+  // legacy playlist assignment (kept for compatibility)
   assignedPlaylistId String?
-  orientation        ScreenOrientation @default(LANDSCAPE)
-  timezone           String            @default("UTC")
-  pairedAt           DateTime?
 
-  // identifies rows created/owned by the browser “virtual screen”
-  isVirtual          Boolean           @default(false)
+  // ✅ NEW: generic “content source” assignment
+  // expected values in code: "playlist" | "channel" | "media" (or your chosen convention)
+  assignedContentType String?
+  assignedContentId   String?
 
-  assignedPlaylist   Playlist?         @relation(fields: [assignedPlaylistId], references: [id])
+  orientation ScreenOrientation @default(LANDSCAPE)
+  timezone    String           @default("UTC")
+
+  pairedAt  DateTime?
+  isVirtual Boolean @default(false)
+
+  assignedPlaylist Playlist? @relation(fields: [assignedPlaylistId], references: [id])
 
   @@index([assignedPlaylistId])
+  @@index([assignedContentType])
+  @@index([assignedContentId])
   @@index([isVirtual])
 }
 
 model Playlist {
-  id        String         @id @default(cuid())
+  id        String   @id @default(cuid())
   name      String
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-  items     PlaylistItem[]
-  screens   Screen[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items   PlaylistItem[]
+  screens Screen[]
 }
 
 model PlaylistItem {
-  id         String   @id @default(cuid())
+  id        String   @id @default(cuid())
   playlistId String
   mediaId    String
-  order      Int
-  duration   Int?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
 
-  media      Media    @relation(fields: [mediaId], references: [id], onDelete: Restrict)
-  playlist   Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
+  order    Int
+  duration Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  media    Media    @relation(fields: [mediaId], references: [id], onDelete: Restrict)
+  playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
   @@index([playlistId])
   @@index([mediaId])
 }
 
 model MediaFolder {
-  id        String       @id @default(cuid())
+  id        String   @id @default(cuid())
   name      String
   parentId  String?
-  createdAt DateTime     @default(now())
-  updatedAt DateTime     @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  parent    MediaFolder? @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children  MediaFolder[] @relation("MediaFolderTree")
+  parent   MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children MediaFolder[] @relation("MediaFolderTree")
+  media    Media[]
 
-  media     Media[]
-
-  @@index([parentId])
   @@unique([parentId, name])
+  @@index([parentId])
 }
 
 model Media {
-  id            String         @id @default(cuid())
-  url           String
-  type          String
+  id   String @id @default(cuid())
+  url  String
+  type String
 
   // Display name (original filename)
-  name          String?
-  mimeType      String?
-  sizeBytes     Int?
+  name     String?
+  mimeType String?
+  sizeBytes Int?
 
   // SHA-256 checksum used for dedupe
-  checksum      String?        @unique
+  checksum String? @unique
 
   // Optional: video duration in ms (can be filled later)
-  durationMs    Int?
+  durationMs Int?
 
-  folderId      String?
-  folder        MediaFolder?   @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  folderId String?
+  folder   MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
 
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   playlistItems PlaylistItem[]
 
@@ -97,6 +112,7 @@ model Media {
   @@index([type])
   @@index([createdAt])
 }
+
 model VirtualScreenSession {
   id         String   @id @default(uuid())
   pairingCode String  @unique
@@ -105,8 +121,61 @@ model VirtualScreenSession {
   @@index([createdAt])
 }
 
+model Channel {
+  id          String             @id @default(uuid()) @db.Uuid
+  name        String
+  orientation ChannelOrientation @default(landscape)
+  layoutId    String             @default("default")
+
+  zones      Json @default("{}")
+  transition Json?
+  width      Int?
+  height     Int?
+  updatedBy  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ✅ add opposite relation (required by Prisma)
+  zoneItems ChannelZoneItem[]
+
+  @@index([layoutId])
+  @@index([orientation])
+}
+
+model ChannelZoneItem {
+  id String @id @default(cuid())
+  clientId String?  // ✅ add this
+  // ✅ must be UUID to match Channel.id
+  channelId String @db.Uuid
+  zoneId    String
+
+  sourceType String
+  sourceId   String
+  name       String
+
+  order       Int
+  durationSec Int
+
+  startAt DateTime?
+  endAt   DateTime?
+
+  schedule  Json?
+  schedules Json?
+
+  channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([channelId])
+  @@index([zoneId])
+   @@unique([channelId, zoneId, clientId]) // ✅ if you rely on clientId
+}
+
+enum ChannelOrientation {
+  landscape
+  portrait
+}
+
 enum ScreenOrientation {
   LANDSCAPE
   PORTRAIT
 }
-

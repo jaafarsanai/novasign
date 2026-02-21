@@ -1,6 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./MediaPickerModal.css";
-import { X, Search, Upload as UploadIcon, CheckCircle2, Circle, Pencil, RotateCw, Folder, ChevronLeft } from "lucide-react";
+import {
+  X,
+  Search,
+  Upload as UploadIcon,
+  CheckCircle2,
+  Circle,
+  Pencil,
+  RotateCw,
+  Folder,
+  ChevronLeft,
+  ChevronRight,
+} from "lucide-react";
 import ImageEditorModal, { EditedImageResult } from "./ImageEditorModal";
 
 type MediaItem = {
@@ -28,6 +39,8 @@ type Props = {
 type TabKey = "media" | "links" | "canvas" | "apps" | "quickpost";
 type ViewKey = "library" | "upload";
 type LibraryMode = "global" | "playlist_fallback";
+
+type TypeFilter = "all" | "image" | "video";
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, {
@@ -150,7 +163,6 @@ function uploadWithProgress(endpoint: string, form: FormData, onProgress: (pct: 
 
 /**
  * Extract duration from a Blob (video) in ms.
- * Works for File and for edited Blob.
  */
 async function getVideoDurationFromBlobMs(blob: Blob, kindHint?: "image" | "video" | "unknown"): Promise<number | null> {
   if (!blob) return null;
@@ -202,21 +214,28 @@ async function getVideoDurationFromBlobMs(blob: Blob, kindHint?: "image" | "vide
   });
 }
 
+/** NEW: left folders selection model */
+type ActiveFolderKey = "__ALL__" | "__LIBRARY__" | string;
+
 export default function MediaPickerModal({ open, playlistId, onClose, onAdded }: Props) {
   const [tab, setTab] = useState<TabKey>("media");
   const [view, setView] = useState<ViewKey>("library");
 
   // Library
   const [q, setQ] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
   const [loading, setLoading] = useState(false);
   const [library, setLibrary] = useState<MediaItem[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [banner, setBanner] = useState<string | null>(null);
   const [libraryMode, setLibraryMode] = useState<LibraryMode>("global");
 
-  // Folder browsing (library)
+  // Folder browsing (tree endpoint)
   const [folders, setFolders] = useState<FolderNode[]>([]);
   const [folderId, setFolderId] = useState<string | null>(null);
+
+  // NEW: what is selected in the left folders panel
+  const [activeFolder, setActiveFolder] = useState<ActiveFolderKey>("__ALL__");
 
   // Upload
   const [uploads, setUploads] = useState<UploadDraft[]>([]);
@@ -252,8 +271,11 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
     setLibrary([]);
     setLibraryMode("global");
     setFolderId(null);
+    setActiveFolder("__ALL__"); // ✅ default to All
     setUploading(false);
     setUploadPct(0);
+    setQ("");
+    setTypeFilter("all");
   }, [open]);
 
   function cleanupUploads(list: UploadDraft[] = uploads) {
@@ -277,6 +299,14 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
     else setFolders([]);
   }
 
+  /**
+   * ✅ FIXED: Library loading uses activeFolder (All/Library/<folder>)
+   * - "__ALL__": no folderId param => backend should return everything
+   * - "__LIBRARY__": folderId=root (root listing like your old behavior)
+   * - "<id>": folderId=<id>
+   *
+   * If your backend requires explicit "folderId=root" for root, keep it only for Library.
+   */
   async function loadLibrary() {
     if (!open) return;
 
@@ -288,8 +318,21 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
 
     if (qq) params.set("search", qq);
 
-    if (!qq && !folderId) params.set("folderId", "root");
-    if (folderId) params.set("folderId", folderId);
+    const isAll = activeFolder === "__ALL__";
+    const isLibrary = activeFolder === "__LIBRARY__";
+
+    // Keep folder tree browsing disabled when searching (like before)
+    // But still allow ALL results when searching.
+    if (!qq) {
+      if (isLibrary) {
+        // Root browsing (previous behavior)
+        params.set("folderId", "root");
+      } else if (!isAll && typeof activeFolder === "string") {
+        // specific folder
+        params.set("folderId", activeFolder);
+      }
+      // isAll => no folderId param
+    }
 
     const rGlobal = await tryFetchJson<{ items: MediaItem[] }>(`/api/media?${params.toString()}`);
     if (rGlobal.ok) {
@@ -299,7 +342,7 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
       return;
     }
 
-    // 2) Fallback: playlist items endpoint
+    // Fallbacks remain unchanged
     const rItems = await tryFetchJson<{ items: any[] }>(`/api/playlists/${encodeURIComponent(playlistId)}/items`);
     if (rItems.ok) {
       setLibraryMode("playlist_fallback");
@@ -320,7 +363,6 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
       return;
     }
 
-    // 3) Fallback: playlist details endpoint
     const rPlaylist = await tryFetchJson<any>(`/api/playlists/${encodeURIComponent(playlistId)}`);
     if (rPlaylist.ok) {
       setLibraryMode("playlist_fallback");
@@ -343,9 +385,7 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
 
     setLibraryMode("global");
     setLibrary([]);
-    setBanner(
-      "Cannot load media. Missing endpoints: GET /api/media?search= (global library) and/or GET /api/playlists/:id (playlist details)."
-    );
+    setBanner("Cannot load media. Missing endpoints: GET /api/media?search= (global library) and/or GET /api/playlists/:id (playlist details).");
     setLoading(false);
   }
 
@@ -359,7 +399,7 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
     const t = window.setTimeout(() => loadLibrary(), 200);
     return () => window.clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, q, playlistId, folderId]);
+  }, [open, q, playlistId, activeFolder, typeFilter]);
 
   function toggleSelect(id: string) {
     setSelected((prev) => {
@@ -441,7 +481,6 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
     setUploadPct(0);
     setBanner(null);
 
-    // Build multipart + meta (durationMs for videos)
     const fd = new FormData();
     const meta: Array<{ name: string; size: number; durationMs?: number }> = [];
 
@@ -461,9 +500,9 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
     fd.append("meta", JSON.stringify(meta));
 
     const params = new URLSearchParams();
-    if (folderId) params.set("folderId", folderId);
+    // If currently on a real folder id, upload into it. All/Library -> no folderId upload param.
+    if (typeof activeFolder === "string" && !activeFolder.startsWith("__")) params.set("folderId", activeFolder);
 
-    // 1) Preferred: upload to global library with progress
     try {
       const libResp = await uploadWithProgress(`/api/media/upload?${params.toString()}`, fd, (pct) => setUploadPct(pct));
       const created = (libResp?.items || []).map((m: MediaItem) => ({ ...m, name: m.name || nameFromUrl(m.url) }));
@@ -497,11 +536,10 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
       onAdded?.();
       onClose();
       return;
-    } catch (e: any) {
+    } catch {
       // continue to fallback
     }
 
-    // 2) Fallback: direct upload to playlist endpoint (also with progress)
     try {
       await uploadWithProgress(`/api/playlists/${encodeURIComponent(playlistId)}/items/upload`, fd, (pct) => setUploadPct(pct));
 
@@ -548,19 +586,15 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
 
   const selectedCount = selected.size;
 
-  const filteredLibrary = useMemo(() => {
-    const qq = q.trim().toLowerCase();
-    if (!qq) return library;
-    return (library || []).filter((x) => String(x.name || "").toLowerCase().includes(qq));
-  }, [library, q]);
-
   const folderIndex = useMemo(() => buildFolderIndex(folders), [folders]);
 
+  // For breadcrumb when browsing a specific folder
   const folderPath = useMemo(() => {
-    if (!folderId) return [];
+    const id = typeof activeFolder === "string" && !activeFolder.startsWith("__") ? activeFolder : null;
+    if (!id) return [];
     const byId = folderIndex.byId;
     const path: FolderNode[] = [];
-    let cur = byId.get(folderId) || null;
+    let cur = byId.get(id) || null;
     const guard = new Set<string>();
     while (cur && !guard.has(cur.id)) {
       guard.add(cur.id);
@@ -568,12 +602,23 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
       cur = cur.parentId ? byId.get(cur.parentId) || null : null;
     }
     return path;
-  }, [folderId, folderIndex]);
+  }, [activeFolder, folderIndex]);
 
-  const currentFolders = useMemo(() => {
-    if (q.trim()) return [] as FolderNode[];
-    return folderIndex.parentToChildren.get(folderId) || (folderId ? [] : folderIndex.roots);
-  }, [folderIndex, folderId, q]);
+  // Folders list for left panel (top-level only, like your screenshot)
+  const rootFolders = useMemo(() => folderIndex.roots || [], [folderIndex]);
+
+  // Filter library by search + type
+  const filteredLibrary = useMemo(() => {
+    const qq = q.trim().toLowerCase();
+    return (library || []).filter((m) => {
+      const name = String(m.name || "").toLowerCase();
+      if (qq && !name.includes(qq)) return false;
+
+      if (typeFilter === "all") return true;
+      const kind = String(m.type || guessTypeFromName(m.name || nameFromUrl(m.url))).toLowerCase();
+      return kind === typeFilter;
+    });
+  }, [library, q, typeFilter]);
 
   if (!open) return null;
 
@@ -622,6 +667,19 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
                 <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Media" disabled={uploading} />
               </div>
 
+              <select
+                className="mp-filter"
+                value={typeFilter}
+                onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
+                disabled={uploading}
+                aria-label="Filter type"
+                title="Filter type"
+              >
+                <option value="all">All</option>
+                <option value="image">Images</option>
+                <option value="video">Videos</option>
+              </select>
+
               <button
                 className="mp-btn mp-btn-yellow"
                 disabled={uploading}
@@ -641,117 +699,179 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
 
             {view === "library" ? (
               <>
-                <div className="mp-section-title mp-section-title-row">
-                  <div className="mp-breadcrumb">
-                    {folderId ? (
+                {/* NEW: folders-left + list-right layout */}
+                <div className="mp-library-grid">
+                  {/* LEFT FOLDERS */}
+                  <div className="mp-folders">
+                    <div className="mp-section-title" style={{ padding: "10px 10px 0 10px", margin: 0 }}>
+                      Folders
+                    </div>
+
+                    <div className="mp-folder-list">
                       <button
-                        className="mp-bc-back"
+                        type="button"
+                        className={`mp-folder-row ${activeFolder === "__ALL__" ? "is-active" : ""}`}
                         onClick={() => {
-                          const last = folderPath[folderPath.length - 1];
-                          const parent = last?.parentId ?? null;
-                          setFolderId(parent);
+                          setActiveFolder("__ALL__");
+                          setFolderId(null);
                         }}
-                        title="Back"
-                        aria-label="Back"
                         disabled={uploading}
                       >
-                        <ChevronLeft size={16} />
+                        <span className="mp-folder-caret" aria-hidden>
+                          <ChevronRight size={14} />
+                        </span>
+                        <Folder size={16} />
+                        <span className="mp-folder-name">All</span>
                       </button>
-                    ) : null}
 
-                    <span className="mp-bc-root" onClick={() => setFolderId(null)} role="button" tabIndex={0}>
-                      Library
-                    </span>
+                      <button
+                        type="button"
+                        className={`mp-folder-row ${activeFolder === "__LIBRARY__" ? "is-active" : ""}`}
+                        onClick={() => {
+                          setActiveFolder("__LIBRARY__");
+                          setFolderId(null);
+                        }}
+                        disabled={uploading}
+                      >
+                        <span className="mp-folder-caret" aria-hidden>
+                          <ChevronRight size={14} />
+                        </span>
+                        <Folder size={16} />
+                        <span className="mp-folder-name">Library</span>
+                      </button>
 
-                    {folderPath.map((f) => (
-                      <span key={f.id} className="mp-bc-seg" onClick={() => setFolderId(f.id)} role="button" tabIndex={0} title={f.name}>
-                        / {f.name}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="mp-table-head">
-                  <div className="mp-col-name">NAME</div>
-                  <div className="mp-col-kind">KIND</div>
-                  <div className="mp-col-sel" />
-                </div>
-
-                <div className="mp-list">
-                  {loading ? (
-                    <div className="mp-empty">Loading…</div>
-                  ) : currentFolders.length === 0 && filteredLibrary.length === 0 ? (
-                    <div className="mp-empty">
-                      No media found.
-                      <div className="mp-empty-sub">Click “Upload” to add new files.</div>
-                    </div>
-                  ) : (
-                    <>
-                      {currentFolders.map((f) => (
-                        <div
+                      {rootFolders.map((f) => (
+                        <button
                           key={f.id}
-                          className="mp-row mp-row-folder"
-                          onClick={() => setFolderId(f.id)}
-                          title="Open folder"
+                          type="button"
+                          className={`mp-folder-row ${activeFolder === f.id ? "is-active" : ""}`}
+                          onClick={() => {
+                            setActiveFolder(f.id);
+                            setFolderId(f.id);
+                          }}
+                          title={f.name}
+                          disabled={uploading}
                         >
-                          <div className="mp-row-left">
-                            <div className="mp-thumb mp-thumb-folder">
-                              <Folder size={18} />
-                            </div>
-                            <div className="mp-row-nameblock">
-                              <div className="mp-row-name">{f.name}</div>
-                              <div className="mp-row-sub">Folder</div>
-                            </div>
-                          </div>
-
-                          <div className="mp-kind">folder</div>
-                          <div className="mp-sel" />
-                        </div>
+                          <span className="mp-folder-caret" aria-hidden>
+                            <ChevronRight size={14} />
+                          </span>
+                          <Folder size={16} />
+                          <span className="mp-folder-name">{f.name}</span>
+                        </button>
                       ))}
 
-                      {filteredLibrary.map((m) => {
-                        const isSelected = selected.has(m.id);
-                        const kind = String(m.type || guessTypeFromName(m.name || nameFromUrl(m.url))).toLowerCase();
-                        return (
-                          <div key={m.id} className={`mp-row ${isSelected ? "is-selected" : ""}`} onClick={() => toggleSelect(m.id)}>
-                            <div className="mp-row-left">
-                              <div className="mp-thumb">
-                                {kind === "video" ? <video src={absUrl(m.url)} muted playsInline /> : <img src={absUrl(m.url)} alt="" />}
-                              </div>
-                              <div className="mp-row-nameblock">
-                                <div className="mp-row-name">{m.name || nameFromUrl(m.url) || m.id}</div>
-                                {m.createdAt ? <div className="mp-row-sub">Uploaded on {new Date(m.createdAt).toLocaleString()}</div> : null}
-                              </div>
-                            </div>
-
-                            <div className="mp-kind">{kind || "media"}</div>
-                            <div className="mp-sel">{isSelected ? <CheckCircle2 size={18} /> : <Circle size={18} />}</div>
-                          </div>
-                        );
-                      })}
-                    </>
-                  )}
-                </div>
-
-                <div className="mp-footer">
-                  <div className="mp-footer-left">
-                    <span className="mp-selected-pill">
-                      Selected <b>{selectedCount}</b>
-                    </span>
+                      {!loading && rootFolders.length === 0 ? <div className="mp-empty-folders">No folders.</div> : null}
+                    </div>
                   </div>
-                  <div className="mp-footer-right">
-                    <button className="mp-btn" onClick={() => setSelected(new Set())} disabled={selectedCount === 0 || uploading}>
-                      Deselect All
-                    </button>
 
-                    <button
-                      className="mp-btn mp-btn-yellow"
-                      onClick={addSelectedToPlaylist}
-                      disabled={selectedCount === 0 || libraryMode !== "global" || uploading}
-                      title={libraryMode !== "global" ? "Requires global library API (/api/media + attach endpoint)" : "Add to playlist"}
-                    >
-                      Add
-                    </button>
+                  {/* RIGHT LIST */}
+                  <div className="mp-library-right">
+                    {/* Breadcrumb: show only when inside a real folder */}
+                    <div className="mp-section-title mp-section-title-row">
+                      <div className="mp-breadcrumb">
+                        {typeof activeFolder === "string" && !activeFolder.startsWith("__") ? (
+                          <button
+                            className="mp-bc-back"
+                            onClick={() => {
+                              const last = folderPath[folderPath.length - 1];
+                              const parent = last?.parentId ?? null;
+                              if (parent) {
+                                setActiveFolder(parent);
+                                setFolderId(parent);
+                              } else {
+                                setActiveFolder("__LIBRARY__");
+                                setFolderId(null);
+                              }
+                            }}
+                            title="Back"
+                            aria-label="Back"
+                            disabled={uploading}
+                          >
+                            <ChevronLeft size={16} />
+                          </button>
+                        ) : null}
+
+                        <span className="mp-bc-root" onClick={() => { setActiveFolder("__LIBRARY__"); setFolderId(null); }} role="button" tabIndex={0}>
+                          Library
+                        </span>
+
+                        {folderPath.map((f) => (
+                          <span
+                            key={f.id}
+                            className="mp-bc-seg"
+                            onClick={() => {
+                              setActiveFolder(f.id);
+                              setFolderId(f.id);
+                            }}
+                            role="button"
+                            tabIndex={0}
+                            title={f.name}
+                          >
+                            / {f.name}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="mp-table-head">
+                      <div className="mp-col-name">NAME</div>
+                      <div className="mp-col-kind">KIND</div>
+                      <div className="mp-col-sel" />
+                    </div>
+
+                    <div className="mp-list">
+                      {loading ? (
+                        <div className="mp-empty">Loading…</div>
+                      ) : filteredLibrary.length === 0 ? (
+                        <div className="mp-empty">
+                          No media found.
+                          <div className="mp-empty-sub">Click “Upload” to add new files.</div>
+                        </div>
+                      ) : (
+                        filteredLibrary.map((m) => {
+                          const isSelected = selected.has(m.id);
+                          const kind = String(m.type || guessTypeFromName(m.name || nameFromUrl(m.url))).toLowerCase();
+                          return (
+                            <div key={m.id} className={`mp-row ${isSelected ? "is-selected" : ""}`} onClick={() => toggleSelect(m.id)}>
+                              <div className="mp-row-left">
+                                <div className="mp-thumb">
+                                  {kind === "video" ? <video src={absUrl(m.url)} muted playsInline /> : <img src={absUrl(m.url)} alt="" />}
+                                </div>
+                                <div className="mp-row-nameblock">
+                                  <div className="mp-row-name">{m.name || nameFromUrl(m.url) || m.id}</div>
+                                  {m.createdAt ? <div className="mp-row-sub">Uploaded on {new Date(m.createdAt).toLocaleString()}</div> : null}
+                                </div>
+                              </div>
+
+                              <div className="mp-kind">{kind || "media"}</div>
+                              <div className="mp-sel">{isSelected ? <CheckCircle2 size={18} /> : <Circle size={18} />}</div>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+
+                    <div className="mp-footer">
+                      <div className="mp-footer-left">
+                        <span className="mp-selected-pill">
+                          Selected <b>{selectedCount}</b>
+                        </span>
+                      </div>
+                      <div className="mp-footer-right">
+                        <button className="mp-btn" onClick={() => setSelected(new Set())} disabled={selectedCount === 0 || uploading}>
+                          Deselect All
+                        </button>
+
+                        <button
+                          className="mp-btn mp-btn-yellow"
+                          onClick={addSelectedToPlaylist}
+                          disabled={selectedCount === 0 || libraryMode !== "global" || uploading}
+                          title={libraryMode !== "global" ? "Requires global library API (/api/media + attach endpoint)" : "Add to playlist"}
+                        >
+                          Add
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
               </>
@@ -791,9 +911,7 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
 
                         return (
                           <div key={u.id} className="mp-up-row">
-                            <div className="mp-up-thumb">
-                              {u.kind === "video" ? <div className="mp-up-video">VIDEO</div> : <img src={String(preview)} alt="" />}
-                            </div>
+                            <div className="mp-up-thumb">{u.kind === "video" ? <div className="mp-up-video">VIDEO</div> : <img src={String(preview)} alt="" />}</div>
 
                             <div className="mp-up-main">
                               <div className="mp-up-name">
@@ -804,12 +922,7 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
                             </div>
 
                             <div className="mp-up-actions">
-                              <button
-                                className="mp-iconbtn"
-                                onClick={() => canEdit && setEditing(u)}
-                                disabled={!canEdit || uploading}
-                                title="Edit (crop/rotate/circle)"
-                              >
+                              <button className="mp-iconbtn" onClick={() => canEdit && setEditing(u)} disabled={!canEdit || uploading} title="Edit (crop/rotate/circle)">
                                 <RotateCw size={16} />
                               </button>
                               <button className="mp-iconbtn mp-iconbtn-danger" onClick={() => removeUpload(u.id)} disabled={uploading} title="Remove">
@@ -848,4 +961,3 @@ export default function MediaPickerModal({ open, playlistId, onClose, onAdded }:
     </div>
   );
 }
-

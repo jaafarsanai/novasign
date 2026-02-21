@@ -64,19 +64,9 @@
 }
 
 /* Body layout */
-.mp-body {
-  flex: 1;
-  display: grid;
-  grid-template-columns: 220px 1fr;
-  min-height: 0;
-}
 
 /* Left nav */
-.mp-nav {
-  border-right: 1px solid #edf2f7;
-  padding: 10px;
-  background: #fbfcfe;
-}
+
 
 .mp-nav-item {
   width: 100%;
@@ -108,13 +98,7 @@
   justify-content: center;
 }
 
-/* Main */
-.mp-main {
-  padding: 12px 14px;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-}
+
 
 .mp-toolbar {
   display: flex;
@@ -263,15 +247,19 @@
   text-align: right;
 }
 
-/* List */
-.mp-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  border: 1px solid #edf2f7;
-  border-radius: 14px;
-}
 
+.mp-filter {
+  border: 1px solid #e4e9f0;
+  background: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  height: 40px;
+  cursor: pointer;
+}
+.mp-filter:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .mp-empty {
   padding: 18px 12px;
   color: #64748b;
@@ -551,3 +539,136 @@
   transition: width 120ms linear;
 }
 
+/* Body layout */
+.mp-body {
+  flex: 1;               /* ✅ TAKE remaining height under header */
+  min-height: 0;         /* ✅ allow children to shrink + scroll */
+  display: grid;
+
+  grid-template-columns: 180px minmax(0, 1fr) !important; /* LEFT smaller, RIGHT grows */
+  width: 100%;
+}
+
+/* Left nav */
+.mp-nav {
+  min-height: 0;         /* ✅ important for grid children */
+  overflow: auto;        /* optional: scroll if many items */
+  width: 180px;
+}
+
+/* Main */
+.mp-main {
+   min-width: 0;
+  width: 100%;
+  justify-self: stretch;
+  min-height: 0;  
+  display: flex;
+  flex-direction: column;
+}
+
+/* List */
+.mp-list {
+  flex: 1;               /* ✅ fills remaining space */
+  min-height: 0;         /* ✅ allows internal scrolling */
+  overflow-y: auto;      /* ✅ vertical scroll */
+  overflow-x: hidden;    /* ✅ prevent horizontal scroll */
+}
+
+/* Footer */
+.mp-footer {
+  margin-top: 10px;
+  flex: 0 0 auto;        /* ✅ stays visible, not pushed into scroll */
+}
+/* =========================
+   Library: folders-left layout (ChannelContentPickerModal-like)
+   ========================= */
+
+.mp-library-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: 12px;
+}
+
+/* Left folders panel */
+.mp-folders {
+  min-height: 0;
+  border: 1px solid #edf2f7;
+  border-radius: 14px;
+  background: #fff;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mp-folder-list {
+  padding: 10px;
+  overflow: auto;
+  min-height: 0;
+}
+
+/* Folder row (vertical list) */
+.mp-folder-row {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 12px;
+  padding: 10px 10px;
+  cursor: pointer;
+  display: flex;            /* ✅ makes icon + text align nicely */
+  align-items: center;
+  gap: 10px;
+  color: #0f172a;
+  text-align: left;
+}
+
+.mp-folder-row:hover {
+  background: #f6f8fb;
+}
+
+.mp-folder-row.is-active {
+  background: #eef3ff;
+  border-color: #dbe6ff;
+  font-weight: 650;
+}
+
+.mp-folder-caret {
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+}
+
+.mp-folder-name {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Right list panel wrapper */
+.mp-library-right {
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Optional: make folders empty state look consistent */
+.mp-empty-folders {
+  padding: 10px;
+  font-size: 13px;
+  color: #64748b;
+}
+
+/* Responsive: collapse folders on small screens */
+@media (max-width: 900px) {
+  .mp-library-grid {
+    grid-template-columns: 1fr;
+  }
+  .mp-folders {
+    max-height: 180px; /* folders become a top panel */
+  }
+}

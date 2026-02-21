@@ -7,11 +7,18 @@ export type Zone = {
   h: number;
 };
 
+export type LayoutOrientation = "landscape" | "portrait" | "any";
+
 export type LayoutDef = {
   id: string;
   name: string;
-  zones: Zone[];
+  zones: Zone[];              // ✅ IMPORTANT
+  orientation?: LayoutOrientation;
 };
+
+
+
+
 
 export const ALL_LAYOUTS: LayoutDef[] = [
 { id: "layout_main", name: "Main", zones: [{ id: "z1", name: "Main Zone", x: 0, y: 0, w: 100, h: 100 }] },

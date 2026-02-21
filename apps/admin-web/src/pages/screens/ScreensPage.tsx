@@ -2,9 +2,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import PairScreenModal from "./PairScreenModal";
-import AssignPlaylistModal from "./AssignPlaylistModal";
 import Pagination from "../../ui/Pagination";
 import { Modal } from "../../ui/Modal";
+import ScreenSetContentModal, { ScreenPickerResult } from "./components/ScreenSetContentModal";
 import "./ScreensPage.css";
 
 type ApiScreenRow = {
@@ -14,8 +14,16 @@ type ApiScreenRow = {
   pairedAt: string | null;
   lastSeenAt: string | null;
   isVirtual: boolean;
+
+  // legacy playlist fields (still supported)
   assignedPlaylistId?: string | null;
   assignedPlaylistName?: string | null;
+
+  // generic assignment
+  assignedContentType?: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
+  assignedContentId?: string | null;
+  assignedContentName?: string | null;
+
   virtualSessionId?: string | null;
 };
 
@@ -25,8 +33,14 @@ type UiRow = {
   pairingCode: string;
   type: "VIRTUAL" | "DEVICE";
   lastSeenAt: string | null;
+
   assignedPlaylistId: string | null;
   assignedPlaylistName: string | null;
+
+  assignedContentType: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
+  assignedContentId: string | null;
+  assignedContentName: string | null;
+
   virtualSessionId: string | null;
 };
 
@@ -37,8 +51,14 @@ type ScreenSnapshotEvent = {
   pairedAt: string | null;
   lastSeenAt: string | null;
   isVirtual: boolean;
+
   assignedPlaylistId: string | null;
   assignedPlaylistName: string | null;
+
+  assignedContentType?: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
+  assignedContentId?: string | null;
+  assignedContentName?: string | null;
+
   virtualSessionId?: string | null;
 };
 
@@ -60,20 +80,52 @@ function isOnline(lastSeenAt: string | null, nowMs: number, windowMs = 30_000) {
 
 function mapApiToUi(s: ApiScreenRow): UiRow {
   const fallback = s.isVirtual ? "Virtual Screen" : "Screen";
+
+  const assignedContentType =
+    (s.assignedContentType as any) ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
+
+  const assignedContentId =
+    (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
+
+  const assignedContentName =
+    (s.assignedContentName as any) ?? (s.assignedPlaylistName ?? null);
+
   return {
     id: s.id,
     name: (s.name ?? fallback).trim() || fallback,
     pairingCode: s.pairingCode,
     type: s.isVirtual ? "VIRTUAL" : "DEVICE",
     lastSeenAt: s.lastSeenAt,
+
     assignedPlaylistId: (s as any).assignedPlaylistId ?? null,
     assignedPlaylistName: (s as any).assignedPlaylistName ?? null,
+
+    assignedContentType,
+    assignedContentId,
+    assignedContentName,
+
     virtualSessionId: (s as any).virtualSessionId ?? null,
   };
 }
 
 function openKey(code: string) {
   return `ns2:vs-open:${String(code || "").trim().toUpperCase()}`;
+}
+
+function formatSourceLabel(r: UiRow) {
+  const name = r.assignedContentName ?? r.assignedPlaylistName ?? null;
+  const t = r.assignedContentType;
+
+  if (!name) return "—";
+
+  if (t === "PLAYLIST") return `Playlist: ${name}`;
+  if (t === "MEDIA") return `Media: ${name}`;
+  if (t === "CHANNEL") return `Channel: ${name}`;
+
+  // fallback (legacy)
+  if (r.assignedPlaylistName) return `Playlist: ${r.assignedPlaylistName}`;
+
+  return name;
 }
 
 export default function ScreensPage() {
@@ -89,9 +141,6 @@ export default function ScreensPage() {
 
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
 
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [assignScreen, setAssignScreen] = useState<UiRow | null>(null);
-
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -104,6 +153,11 @@ export default function ScreensPage() {
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UiRow | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+
+  // Set content modal state
+  const [setContentOpen, setSetContentOpen] = useState(false);
+  const [setContentScreenId, setSetContentScreenId] = useState<string | null>(null);
+  const [setContentBusy, setSetContentBusy] = useState(false);
 
   const sockRef = useRef<Socket | null>(null);
 
@@ -147,14 +201,30 @@ export default function ScreensPage() {
         const idx = next.findIndex((x) => x.id === evt.id);
 
         const fallback = evt.isVirtual ? "Virtual Screen" : "Screen";
+
+        const assignedContentType =
+          (evt.assignedContentType as any) ?? (evt.assignedPlaylistId ? "PLAYLIST" : null);
+
+        const assignedContentId =
+          (evt.assignedContentId as any) ?? (evt.assignedPlaylistId ?? null);
+
+        const assignedContentName =
+          (evt.assignedContentName as any) ?? (evt.assignedPlaylistName ?? null);
+
         const mapped: UiRow = {
           id: evt.id,
           name: (evt.name ?? fallback).trim() || fallback,
           pairingCode: evt.pairingCode,
           type: evt.isVirtual ? "VIRTUAL" : "DEVICE",
           lastSeenAt: evt.lastSeenAt,
+
           assignedPlaylistId: evt.assignedPlaylistId,
           assignedPlaylistName: evt.assignedPlaylistName,
+
+          assignedContentType,
+          assignedContentId,
+          assignedContentName,
+
           virtualSessionId: (evt as any).virtualSessionId ?? null,
         };
 
@@ -196,12 +266,15 @@ export default function ScreensPage() {
     const base = rows ?? [];
     const qq = q.trim().toLowerCase();
     if (!qq) return base;
-    return base.filter(
-      (r) =>
+
+    return base.filter((r) => {
+      const sourceName = formatSourceLabel(r).toLowerCase();
+      return (
         r.name.toLowerCase().includes(qq) ||
         r.pairingCode.toLowerCase().includes(qq) ||
-        (r.assignedPlaylistName ?? "").toLowerCase().includes(qq)
-    );
+        sourceName.includes(qq)
+      );
+    });
   }, [rows, q]);
 
   const total = filtered.length;
@@ -254,10 +327,37 @@ export default function ScreensPage() {
     }
   }
 
-  function openAssign(r: UiRow) {
-    setAssignScreen(r);
-    setAssignOpen(true);
+  function openSetContent(r: UiRow) {
+    setSetContentScreenId(r.id);
+    setSetContentOpen(true);
     setMenuOpenId(null);
+    setError(null);
+  }
+
+  async function assignPickedToScreen(screenId: string, picked: ScreenPickerResult) {
+    const type = picked.type; // lowercase: channel|playlist|media
+    const id = picked.item.id;
+
+    setSetContentBusy(true);
+    setError(null);
+
+    try {
+      const res = await fetch(`/api/screens/${encodeURIComponent(screenId)}/assign-content`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ type, id }),
+      });
+
+      if (!res.ok) {
+        setError(await res.text());
+        return;
+      }
+
+      await load();
+    } finally {
+      setSetContentBusy(false);
+    }
   }
 
   function startRename(r: UiRow) {
@@ -283,7 +383,6 @@ export default function ScreensPage() {
     setRenameBusy(true);
     setError(null);
 
-    // Optimistic UI
     setRows((prev) => (prev ?? []).map((x) => (x.id === id ? { ...x, name } : x)));
 
     try {
@@ -295,7 +394,6 @@ export default function ScreensPage() {
       });
 
       if (!res.ok) {
-        // revert by reloading truth
         setError(await res.text());
         await load();
         return;
@@ -342,7 +440,6 @@ export default function ScreensPage() {
     setError(null);
     setMenuOpenId(null);
 
-    // Prefer server refresh endpoint (pushes vs:refresh + re-push state/playlist)
     const res = await fetch(`/api/screens/${encodeURIComponent(r.id)}/refresh`, {
       method: "POST",
       credentials: "include",
@@ -353,7 +450,6 @@ export default function ScreensPage() {
       return;
     }
 
-    // Also reload admin list for consistency
     await load();
   }
 
@@ -361,14 +457,12 @@ export default function ScreensPage() {
     setError(null);
 
     if (r.type === "VIRTUAL") {
-      // If API returned a session id, open it.
       if (r.virtualSessionId) {
         window.open(`/virtual-screen/${encodeURIComponent(r.virtualSessionId)}`, "_blank", "noopener,noreferrer");
         setMenuOpenId(null);
         return;
       }
 
-      // If missing, try localStorage heartbeat (same browser/profile).
       try {
         const raw = localStorage.getItem(openKey(r.pairingCode));
         if (raw) {
@@ -385,7 +479,6 @@ export default function ScreensPage() {
         }
       } catch {}
 
-      // Deterministic message: server didn't provide session id and none found locally.
       setError(
         "Preview is not available from this browser/profile right now. If the virtual screen is open in another browser/device, use that tab. Otherwise, click Refresh and try Preview again."
       );
@@ -393,7 +486,6 @@ export default function ScreensPage() {
       return;
     }
 
-    // Device preview not supported (unless you later add a device emulator).
     setError("Preview is available only for Virtual Screens.");
     setMenuOpenId(null);
   }
@@ -404,7 +496,7 @@ export default function ScreensPage() {
         <div className="ns2-screens-header">
           <div className="ns2-screens-title">
             <h1>Screens</h1>
-            <p>Manage your screens, pairing codes, and assigned playlists.</p>
+            <p>Manage your screens, pairing codes, and assigned content.</p>
           </div>
 
           <div className="ns2-screens-actions">
@@ -508,7 +600,7 @@ export default function ScreensPage() {
                   <th>Screen</th>
                   <th>Type</th>
                   <th>Status</th>
-                  <th>Playlist</th>
+                  <th>Source</th>
                   <th>Last seen</th>
                   <th className="ns2-th-right">Actions</th>
                 </tr>
@@ -519,11 +611,16 @@ export default function ScreensPage() {
                   const online = isOnline(r.lastSeenAt, nowTick, 30_000);
                   const isEditing = editingId === r.id;
 
+                  const sourceLabel = formatSourceLabel(r);
+
                   return (
                     <tr key={r.id}>
                       <td className="ns2-td-strong">
                         <div className="ns2-rowtitle">
-                          <span className={"ns2-thumb " + (r.type === "VIRTUAL" ? "ns2-thumb-virtual" : "ns2-thumb-device")} aria-hidden />
+                          <span
+                            className={"ns2-thumb " + (r.type === "VIRTUAL" ? "ns2-thumb-virtual" : "ns2-thumb-device")}
+                            aria-hidden
+                          />
 
                           {isEditing ? (
                             <input
@@ -562,7 +659,7 @@ export default function ScreensPage() {
                         )}
                       </td>
 
-                      <td className="ns2-muted">{r.assignedPlaylistName ?? "—"}</td>
+                      <td className="ns2-muted">{sourceLabel}</td>
                       <td className="ns2-muted">{formatTime(r.lastSeenAt)}</td>
 
                       <td className="ns2-td-right">
@@ -581,7 +678,7 @@ export default function ScreensPage() {
                                 Preview
                               </button>
 
-                              <button type="button" className="ns2-menu-item" onClick={() => openAssign(r)}>
+                              <button type="button" className="ns2-menu-item" onClick={() => openSetContent(r)}>
                                 Set content
                               </button>
 
@@ -630,14 +727,18 @@ export default function ScreensPage() {
         error={pairError}
       />
 
-      <AssignPlaylistModal
-        open={assignOpen}
-        screen={assignScreen}
-        onClose={() => setAssignOpen(false)}
-        onSaved={async () => {
-          setAssignOpen(false);
-          setAssignScreen(null);
-          await load();
+      <ScreenSetContentModal
+        open={setContentOpen}
+        onClose={() => {
+          if (setContentBusy) return;
+          setSetContentOpen(false);
+          setSetContentScreenId(null);
+        }}
+        onConfirm={async (picked: ScreenPickerResult) => {
+          if (!setContentScreenId) return;
+          await assignPickedToScreen(setContentScreenId, picked);
+          setSetContentOpen(false);
+          setSetContentScreenId(null);
         }}
       />
 
@@ -681,4 +782,3 @@ export default function ScreensPage() {
     </div>
   );
 }
-

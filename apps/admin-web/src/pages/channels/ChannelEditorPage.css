@@ -1445,16 +1445,7 @@
   padding: 18px;
 }
 
-.mp-modal {
-  width: min(1100px, 96vw);
-  height: min(680px, 92vh);
-  background: #fff;
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 16px 50px rgba(0, 0, 0, 0.22);
-  display: grid;
-  grid-template-rows: 56px 1fr 56px; /* ✅ header / body / footer */
-}
+
 
 .mp-header {
   display: flex;
@@ -1484,35 +1475,66 @@
   line-height: 18px;
 }
 
-.mp-body {
-  display: grid;
-  grid-template-columns: 1fr 320px;
-  min-height: 0;
+/* ===== Media Preview Modal sizing fix ===== */
+
+.mp-modal {
+  width: min(1100px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
 }
 
+.mp-body {
+  flex: 1;
+  display: flex;          /* instead of grid (or override it) */
+  min-height: 0;          /* IMPORTANT so children can size properly */
+}
+
+/* Left preview must take space */
 .mp-preview {
-  background: #f6f7fb;
+  flex: 1;
+  min-width: 720px;       /* increase this if you want bigger preview */
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 18px;
-  min-height: 0;
+  background: #f4f6f9;
+  overflow: hidden;
 }
 
+/* Right details column fixed */
+.mp-details {
+  width: 220px;           /* adjust as you like */
+  flex: 0 0 420px;
+  min-height: 0;
+  overflow: auto;
+  border-left: 1px solid #edf2f7;
+  background: #fff;
+}
+
+/* Make media fill preview area and preserve aspect ratio */
+.mp-media-image,
 .mp-media-video {
   width: 100%;
   height: 100%;
-  max-height: 100%;
-  border-radius: 10px;
-  background: #000;
+  object-fit: contain;    /* key */
 }
 
-.mp-media-image {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  border-radius: 10px;
-  background: #fff;
+/* Optional: mobile stack */
+@media (max-width: 900px) {
+  .mp-body {
+    flex-direction: column;
+  }
+  .mp-details {
+    width: 100%;
+    flex: 0 0 auto;
+    border-left: 0;
+    border-top: 1px solid #edf2f7;
+  }
+  .mp-preview {
+    min-width: 0;
+    height: 45vh;
+  }
 }
 
 .mp-empty {
@@ -1520,11 +1542,6 @@
   font-size: 13px;
 }
 
-.mp-details {
-  border-left: 1px solid rgba(0, 0, 0, 0.08);
-  padding: 16px;
-  overflow: auto;
-}
 
 .mp-details-title {
   font-weight: 800;

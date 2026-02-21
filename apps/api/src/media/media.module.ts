@@ -1,20 +1,13 @@
 import { Module } from "@nestjs/common";
-import { PrismaModule } from "../prisma/prisma.module";
+import { PrismaService } from "../prisma/prisma.service";
 import { MediaController } from "./media.controller";
 import { MediaService } from "./media.service";
-import { PlaylistUploadController } from "./playlist-upload.controller";
 import { MediaFoldersController } from "./media-folders.controller";
 import { MediaFoldersService } from "./media-folders.service";
+import { MediaStreamController } from "./media-stream.controller";
 
 @Module({
-  imports: [PrismaModule],
-  controllers: [
-    MediaController,
-    MediaFoldersController,
-    PlaylistUploadController,
-  ],
-  providers: [MediaService, MediaFoldersService],
-  exports: [MediaService],
+  controllers: [MediaController, MediaFoldersController, MediaStreamController],
+  providers: [MediaService, MediaFoldersService, PrismaService],
 })
 export class MediaModule {}
-

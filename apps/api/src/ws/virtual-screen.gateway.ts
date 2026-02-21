@@ -30,7 +30,9 @@ export class VirtualScreenGateway {
   }
 
   handleConnection(client: Socket) {
-    const code = String(client.handshake?.query?.code ?? "").trim().toUpperCase();
+    const code = String(client.handshake?.query?.code ?? "")
+      .trim()
+      .toUpperCase();
     if (code) {
       client.join(`code:${code}`);
       this.screens.markVirtualConnected(code);
@@ -38,7 +40,9 @@ export class VirtualScreenGateway {
   }
 
   handleDisconnect(client: Socket) {
-    const code = String(client.handshake?.query?.code ?? "").trim().toUpperCase();
+    const code = String(client.handshake?.query?.code ?? "")
+      .trim()
+      .toUpperCase();
     if (code) {
       this.screens.markVirtualDisconnected(code);
     }
@@ -57,15 +61,19 @@ export class VirtualScreenGateway {
 
     const s = await this.screens.getByPairingCodeOrNull(code);
     if (s) {
+      // keep "last seen" + admin snapshot update (fine)
       await this.screens.touchLastSeenById(s.id);
       await this.wsState.pushAdminScreenSnapshot(s.id);
     }
 
-    // Keep existing behavior
-    await this.wsState.pushVirtualScreenBundleToClient(client, code);
-
-    // Add a direct, deterministic fallback so the page can always play content
-    // even if WS-state event naming changes.
+    /**
+     * IMPORTANT:
+     * Do NOT call wsState.pushVirtualScreenBundleToClient() because it typically
+     * includes changing timestamps (Date.now()) that cause the virtual-screen UI
+     * to reset playback every ping.
+     *
+     * ✅ Instead, always emit the deterministic payloads from ScreensService.
+     */
     const state = await this.screens.getVirtualScreenStatePayload(code);
     const playlist = await this.screens.getVirtualScreenPlaylistPayload(code);
 
@@ -74,4 +82,3 @@ export class VirtualScreenGateway {
     client.emit("vs:bundle", { state, playlist });
   }
 }
-

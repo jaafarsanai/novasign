@@ -1,6 +1,18 @@
+// apps/admin-web/src/pages/media/MediaPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./MediaPage.css";
-import { FolderPlus, MoreVertical, Trash2, Upload, Move, ListPlus, Folder, X } from "lucide-react";
+import "./components/CreateFolderModal.css";
+import {
+  FolderPlus,
+  MoreVertical,
+  Trash2,
+  Upload,
+  Move,
+  ListPlus,
+  Folder,
+  X,
+} from "lucide-react";
+import CreateFolderModal from "./components/CreateFolderModal";
 
 type MediaItem = {
   id: string;
@@ -48,7 +60,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    throw Object.assign(new Error(`${res.status} ${res.statusText} ${txt}`.trim()), { status: res.status });
+    throw Object.assign(
+      new Error(`${res.status} ${res.statusText} ${txt}`.trim()),
+      { status: res.status }
+    );
   }
   return res.json() as Promise<T>;
 }
@@ -71,8 +86,16 @@ function fmtBytes(n?: number | null) {
   return `${gb.toFixed(1)} GB`;
 }
 
-function flattenFolders(nodes: FolderNode[], depth = 0): Array<{ id: string; name: string; depth: number; parentId: string | null }> {
-  const out: Array<{ id: string; name: string; depth: number; parentId: string | null }> = [];
+function flattenFolders(
+  nodes: FolderNode[],
+  depth = 0
+): Array<{ id: string; name: string; depth: number; parentId: string | null }> {
+  const out: Array<{
+    id: string;
+    name: string;
+    depth: number;
+    parentId: string | null;
+  }> = [];
   for (const n of nodes) {
     out.push({ id: n.id, name: n.name, depth, parentId: n.parentId });
     if (n.children?.length) out.push(...flattenFolders(n.children, depth + 1));
@@ -161,7 +184,10 @@ function uploadWithProgress(
 
     xhr.upload.onprogress = (evt) => {
       if (!evt.lengthComputable) return;
-      const pct = Math.max(0, Math.min(100, Math.round((evt.loaded / evt.total) * 100)));
+      const pct = Math.max(
+        0,
+        Math.min(100, Math.round((evt.loaded / evt.total) * 100))
+      );
       onProgress(pct);
     };
 
@@ -201,7 +227,11 @@ export default function MediaPage() {
   const [openFolderMenuId, setOpenFolderMenuId] = useState<string | null>(null);
 
   const [moving, setMoving] = useState<MediaItem | null>(null);
-  const [movingFolder, setMovingFolder] = useState<{ id: string; name: string; parentId: string | null } | null>(null);
+  const [movingFolder, setMovingFolder] = useState<{
+    id: string;
+    name: string;
+    parentId: string | null;
+  } | null>(null);
 
   const [adding, setAdding] = useState<MediaItem | null>(null);
   const [playlists, setPlaylists] = useState<Playlist[]>([]);
@@ -211,7 +241,9 @@ export default function MediaPage() {
   const [confirmBusy, setConfirmBusy] = useState(false);
 
   const [usageLoading, setUsageLoading] = useState(false);
-  const [usageById, setUsageById] = useState<Map<string, UsageRow[]>>(new Map());
+  const [usageById, setUsageById] = useState<Map<string, UsageRow[]>>(
+    new Map()
+  );
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -219,6 +251,13 @@ export default function MediaPage() {
   const [uploading, setUploading] = useState(false);
   const [uploadPct, setUploadPct] = useState(0);
   const [uploadLabel, setUploadLabel] = useState<string>("");
+
+  // ✅ Create folder modal state
+  const [createFolderOpen, setCreateFolderOpen] = useState(false);
+  const [createFolderBusy, setCreateFolderBusy] = useState(false);
+  const [createFolderError, setCreateFolderError] = useState<string | null>(
+    null
+  );
 
   async function loadFolders() {
     const r = await fetchJson<{ items: FolderNode[] }>(`/api/media/folders`);
@@ -239,7 +278,9 @@ export default function MediaPage() {
       if (!qq && !selectedFolderId) params.set("folderId", "root");
       if (selectedFolderId) params.set("folderId", selectedFolderId);
 
-      const r = await fetchJson<{ items: MediaItem[] }>(`/api/media?${params.toString()}`);
+      const r = await fetchJson<{ items: MediaItem[] }>(
+        `/api/media?${params.toString()}`
+      );
       const list = r.items || [];
       setItems(list);
 
@@ -278,15 +319,39 @@ export default function MediaPage() {
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
-  async function createFolder() {
-    const name = prompt("Folder name?");
-    if (!name) return;
-    await fetchJson(`/api/media/folders`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, parentId: selectedFolderId || null }),
-    });
-    await loadFolders();
+  // ✅ open styled create folder modal
+  function openCreateFolder() {
+    setCreateFolderError(null);
+    setCreateFolderOpen(true);
+  }
+
+  // ✅ create folder (root or under selected folder)
+  async function submitCreateFolder(name: string) {
+    setCreateFolderBusy(true);
+    setCreateFolderError(null);
+    setBanner(null);
+
+    try {
+      const res = await fetch(`/api/media/folders`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, parentId: selectedFolderId || null }),
+      });
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        setCreateFolderError(txt || `${res.status} ${res.statusText}`);
+        return;
+      }
+
+      setCreateFolderOpen(false);
+      await loadFolders();
+    } catch (e: any) {
+      setCreateFolderError(e?.message ?? "Failed to create folder");
+    } finally {
+      setCreateFolderBusy(false);
+    }
   }
 
   function requestDeleteFolder(id: string, label: string) {
@@ -295,7 +360,9 @@ export default function MediaPage() {
     setConfirmState({ kind: "deleteFolder", id, label });
   }
 
-  async function requestDeleteMediaBulk(itemsToDelete: Array<{ id: string; label: string }>) {
+  async function requestDeleteMediaBulk(
+    itemsToDelete: Array<{ id: string; label: string }>
+  ) {
     setConfirmState({ kind: "deleteMedia", items: itemsToDelete });
     setUsageById(new Map());
     setUsageLoading(true);
@@ -309,7 +376,8 @@ export default function MediaPage() {
       });
 
       const map = new Map<string, UsageRow[]>();
-      for (const row of r.items || []) map.set(String(row.mediaId), row.playlists || []);
+      for (const row of r.items || [])
+        map.set(String(row.mediaId), row.playlists || []);
       setUsageById(map);
     } catch {
       setUsageById(new Map());
@@ -319,7 +387,9 @@ export default function MediaPage() {
   }
 
   async function doDeleteFolder(id: string) {
-    await fetchJson(`/api/media/folders/${encodeURIComponent(id)}`, { method: "DELETE" });
+    await fetchJson(`/api/media/folders/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
     if (selectedFolderId === id) setSelectedFolderId(null);
     await loadFolders();
   }
@@ -367,7 +437,8 @@ export default function MediaPage() {
 
     try {
       // Build meta (video duration) before upload
-      const meta: Array<{ name: string; size: number; durationMs?: number }> = [];
+      const meta: Array<{ name: string; size: number; durationMs?: number }> =
+        [];
       for (const f of Array.from(files)) {
         const durationMs = await getVideoDurationFromFileMs(f);
         if (durationMs) meta.push({ name: f.name, size: f.size, durationMs });
@@ -381,7 +452,9 @@ export default function MediaPage() {
       const params = new URLSearchParams();
       if (selectedFolderId) params.set("folderId", selectedFolderId);
 
-      await uploadWithProgress(`/api/media/upload?${params.toString()}`, fd, (pct) => setUploadPct(pct));
+      await uploadWithProgress(`/api/media/upload?${params.toString()}`, fd, (pct) =>
+        setUploadPct(pct)
+      );
 
       await loadMedia();
     } catch (e: any) {
@@ -415,7 +488,8 @@ export default function MediaPage() {
   }
 
   const visibleIds = useMemo(() => items.map((x) => x.id), [items]);
-  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
+  const allVisibleSelected =
+    visibleIds.length > 0 && visibleIds.every((id) => selectedIds.has(id));
   const selectedCount = selectedIds.size;
 
   function toggleSelectOne(id: string) {
@@ -447,7 +521,11 @@ export default function MediaPage() {
   }, [folders, movingFolder]);
 
   const confirmTitle =
-    confirmState?.kind === "deleteFolder" ? "Delete folder?" : confirmState?.kind === "deleteMedia" ? "Delete from library?" : "";
+    confirmState?.kind === "deleteFolder"
+      ? "Delete folder?"
+      : confirmState?.kind === "deleteMedia"
+      ? "Delete from library?"
+      : "";
 
   const confirmItems = confirmState?.kind === "deleteMedia" ? confirmState.items : [];
 
@@ -455,14 +533,20 @@ export default function MediaPage() {
     confirmState?.kind === "deleteFolder"
       ? `This will permanently delete the folder “${confirmState.label}”. The folder must be empty.`
       : confirmState?.kind === "deleteMedia"
-        ? confirmItems.length === 1
-          ? `This will permanently delete “${confirmItems[0].label}” from the media library. If it is used by playlists, it will be removed from those playlists too.`
-          : `This will permanently delete ${confirmItems.length} files from the media library. If any are used by playlists, they will be removed from those playlists too.`
-        : "";
+      ? confirmItems.length === 1
+        ? `This will permanently delete “${confirmItems[0].label}” from the media library. If it is used by playlists, it will be removed from those playlists too.`
+        : `This will permanently delete ${confirmItems.length} files from the media library. If any are used by playlists, they will be removed from those playlists too.`
+      : "";
 
   function playlistsFor(mediaId: string): UsageRow[] {
     return usageById.get(mediaId) || [];
   }
+
+  const selectedFolderName = useMemo(() => {
+    if (!selectedFolderId) return null;
+    const f = folderFlat.find((x) => x.id === selectedFolderId);
+    return f?.name ?? null;
+  }, [selectedFolderId, folderFlat]);
 
   return (
     <div className="ml-page">
@@ -470,21 +554,40 @@ export default function MediaPage() {
         <div className="ml-title">Media</div>
 
         <div className="ml-searchwrap">
-          <input className="ml-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search Media" />
+          <input
+            className="ml-search"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Search Media"
+          />
         </div>
 
-        <select className="ml-filter" value={type} onChange={(e) => setType(e.target.value as any)}>
+        <select
+          className="ml-filter"
+          value={type}
+          onChange={(e) => setType(e.target.value as any)}
+        >
           <option value="all">All types</option>
           <option value="image">Image</option>
           <option value="video">Video</option>
         </select>
 
-        <button className="ml-btn ml-btn-yellow" onClick={openFilePicker} disabled={uploading}>
+        <button
+          className="ml-btn ml-btn-yellow"
+          onClick={openFilePicker}
+          disabled={uploading}
+        >
           <Upload size={16} />
           {uploading ? "Uploading…" : "Upload"}
         </button>
 
-        <input ref={fileRef} className="ml-hidden" type="file" multiple onChange={(e) => onPickFiles(e.target.files)} />
+        <input
+          ref={fileRef}
+          className="ml-hidden"
+          type="file"
+          multiple
+          onChange={(e) => onPickFiles(e.target.files)}
+        />
       </div>
 
       {uploading ? (
@@ -520,7 +623,10 @@ export default function MediaPage() {
               onClick={() => {
                 const itemsToDelete = items
                   .filter((m) => selectedIds.has(m.id))
-                  .map((m) => ({ id: m.id, label: String(m.name || "").trim() || "(untitled)" }));
+                  .map((m) => ({
+                    id: m.id,
+                    label: String(m.name || "").trim() || "(untitled)",
+                  }));
                 requestDeleteMediaBulk(itemsToDelete);
               }}
             >
@@ -535,7 +641,12 @@ export default function MediaPage() {
         <aside className="ml-folders">
           <div className="ml-folders-head">
             <div className="ml-folders-title">Folders</div>
-            <button className="ml-iconbtn" title="New folder" onClick={createFolder} aria-label="New folder">
+            <button
+              className="ml-iconbtn"
+              title="New folder"
+              onClick={openCreateFolder}
+              aria-label="New folder"
+            >
               <FolderPlus size={16} />
             </button>
           </div>
@@ -582,7 +693,10 @@ export default function MediaPage() {
                 </button>
 
                 {openFolderMenuId === f.id ? (
-                  <div className="ml-menu ml-menu-folder" onMouseDown={(e) => e.stopPropagation()}>
+                  <div
+                    className="ml-menu ml-menu-folder"
+                    onMouseDown={(e) => e.stopPropagation()}
+                  >
                     <button
                       className="ml-menuitem"
                       onClick={() => {
@@ -617,7 +731,12 @@ export default function MediaPage() {
           <div className="ml-table">
             <div className="ml-head ml-head-withsel">
               <div className="ml-col-sel">
-                <input type="checkbox" checked={allVisibleSelected} onChange={toggleSelectAllVisible} aria-label="Select all" />
+                <input
+                  type="checkbox"
+                  checked={allVisibleSelected}
+                  onChange={toggleSelectAllVisible}
+                  aria-label="Select all"
+                />
               </div>
               <div className="ml-col-name">NAME</div>
               <div className="ml-col-kind">KIND</div>
@@ -640,12 +759,21 @@ export default function MediaPage() {
                 return (
                   <div className="ml-row ml-row-withsel" key={m.id}>
                     <div className="ml-selcell">
-                      <input type="checkbox" checked={checked} onChange={() => toggleSelectOne(m.id)} aria-label={`Select ${name}`} />
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleSelectOne(m.id)}
+                        aria-label={`Select ${name}`}
+                      />
                     </div>
 
                     <div className="ml-namecell">
                       <div className="ml-thumb">
-                        {isVideo(m.type) ? <video src={absUrl(m.url)} muted playsInline /> : <img src={absUrl(m.url)} alt="" />}
+                        {isVideo(m.type) ? (
+                          <video src={absUrl(m.url)} muted playsInline />
+                        ) : (
+                          <img src={absUrl(m.url)} alt="" />
+                        )}
                       </div>
 
                       <div className="ml-nameblock">
@@ -656,7 +784,9 @@ export default function MediaPage() {
                     </div>
 
                     <div className="ml-kind">
-                      <span className={`ml-pill ${kind === "Video" ? "is-video" : "is-image"}`}>{kind}</span>
+                      <span className={`ml-pill ${kind === "Video" ? "is-video" : "is-image"}`}>
+                        {kind}
+                      </span>
                     </div>
 
                     <div className="ml-size">{fmtBytes(m.sizeBytes)}</div>
@@ -673,7 +803,12 @@ export default function MediaPage() {
                         <Trash2 size={16} />
                       </button>
 
-                      <button className="ml-actionbtn" title="More" aria-label="More" onClick={() => setOpenMenuId(openMenuId === m.id ? null : m.id)}>
+                      <button
+                        className="ml-actionbtn"
+                        title="More"
+                        aria-label="More"
+                        onClick={() => setOpenMenuId(openMenuId === m.id ? null : m.id)}
+                      >
                         <MoreVertical size={16} />
                       </button>
 
@@ -724,11 +859,32 @@ export default function MediaPage() {
         </main>
       </div>
 
+      {/* ✅ Styled Create Folder Modal */}
+      <CreateFolderModal
+        open={createFolderOpen}
+        title="New folder"
+        parentName={selectedFolderName ?? "Library"}
+        busy={createFolderBusy}
+        error={createFolderError}
+        onClose={() => {
+          if (createFolderBusy) return;
+          setCreateFolderOpen(false);
+        }}
+        onSubmit={submitCreateFolder}
+      />
+
       {moving ? (
-        <div className="ml-modalback" onMouseDown={() => setMoving(null)} role="dialog" aria-modal="true">
+        <div
+          className="ml-modalback"
+          onMouseDown={() => setMoving(null)}
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="ml-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="ml-modaltop">
-              <div className="ml-modaltitle">Move "{String(moving.name || "").trim() || "media"}"?</div>
+              <div className="ml-modaltitle">
+                Move "{String(moving.name || "").trim() || "media"}"?
+              </div>
               <button className="ml-x" onClick={() => setMoving(null)} aria-label="Close">
                 ×
               </button>
@@ -772,7 +928,12 @@ export default function MediaPage() {
       ) : null}
 
       {movingFolder ? (
-        <div className="ml-modalback" onMouseDown={() => setMovingFolder(null)} role="dialog" aria-modal="true">
+        <div
+          className="ml-modalback"
+          onMouseDown={() => setMovingFolder(null)}
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="ml-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="ml-modaltop">
               <div className="ml-modaltitle">Move folder "{movingFolder.name}"?</div>
@@ -824,7 +985,12 @@ export default function MediaPage() {
       ) : null}
 
       {adding ? (
-        <div className="ml-modalback" onMouseDown={() => setAdding(null)} role="dialog" aria-modal="true">
+        <div
+          className="ml-modalback"
+          onMouseDown={() => setAdding(null)}
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="ml-modal" onMouseDown={(e) => e.stopPropagation()}>
             <div className="ml-modaltop">
               <div className="ml-modaltitle">Add to playlist</div>
@@ -870,11 +1036,20 @@ export default function MediaPage() {
       ) : null}
 
       {confirmState ? (
-        <div className="ml-modalback" onMouseDown={() => (confirmBusy ? null : setConfirmState(null))} role="dialog" aria-modal="true">
+        <div
+          className="ml-modalback"
+          onMouseDown={() => (confirmBusy ? null : setConfirmState(null))}
+          role="dialog"
+          aria-modal="true"
+        >
           <div className="ml-confirm" onMouseDown={(e) => e.stopPropagation()}>
             <div className="ml-confirm-top">
               <div className="ml-confirm-title">{confirmTitle}</div>
-              <button className="ml-x" onClick={() => (confirmBusy ? null : setConfirmState(null))} aria-label="Close">
+              <button
+                className="ml-x"
+                onClick={() => (confirmBusy ? null : setConfirmState(null))}
+                aria-label="Close"
+              >
                 ×
               </button>
             </div>
@@ -923,7 +1098,11 @@ export default function MediaPage() {
             </div>
 
             <div className="ml-confirm-bot">
-              <button className="ml-btn" onClick={() => setConfirmState(null)} disabled={confirmBusy}>
+              <button
+                className="ml-btn"
+                onClick={() => setConfirmState(null)}
+                disabled={confirmBusy}
+              >
                 Cancel
               </button>
 
@@ -959,4 +1138,3 @@ export default function MediaPage() {
     </div>
   );
 }
-
