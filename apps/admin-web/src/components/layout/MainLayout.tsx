@@ -1,5 +1,6 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
+import { brand } from "../../config/brand";
 import "./MainLayout.css";
 
 type MainLayoutProps = {
@@ -25,24 +26,27 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
   const navigate = useNavigate();
 
   const handleMenuClick = (item: string) => {
-    if (item === "Screens") {
-      navigate("/screens");
-    }
+    if (item === "Screens") navigate("/screens");
+    if (item === "Welcome") navigate("/");
+    if (item === "Channels") navigate("/channels");
+    if (item === "Playlists") navigate("/playlists");
+    if (item === "Media") navigate("/media");
   };
 
   return (
     <div className="ns-root">
-      {/* Sidebar */}
       <aside className="ns-sidebar">
         <div className="ns-sidebar-header">
           <div className="ns-sidebar-logo">
-            <span className="ns-sidebar-logo-initial">N</span>
+            <img
+              src={brand.logoIcon}
+              alt={brand.appName}
+              style={{ width: 22, height: 22, objectFit: "contain" }}
+            />
           </div>
           <div className="ns-sidebar-title-block">
-            <div className="ns-sidebar-title">Novasign</div>
-            <div className="ns-sidebar-space">
-              Space <span className="ns-sidebar-space-name">Default</span>
-            </div>
+            <div className="ns-sidebar-title">{brand.appName}</div>
+            <div className="ns-sidebar-space">{brand.workspaceName}</div>
           </div>
         </div>
 
@@ -70,12 +74,10 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
 
           <div className="ns-sidebar-user-block">
             <div className="ns-sidebar-user">
-              <div className="ns-sidebar-user-avatar">J</div>
+              <div className="ns-sidebar-user-avatar">{brand.initials}</div>
               <div className="ns-sidebar-user-info">
-                <div className="ns-sidebar-user-name">jaafar</div>
-                <div className="ns-sidebar-user-email">
-                  sanai.jaafar@gmail.com
-                </div>
+                <div className="ns-sidebar-user-name">{brand.demoUserName.toLowerCase()}</div>
+                <div className="ns-sidebar-user-email">{brand.demoUserEmail}</div>
               </div>
             </div>
             <div className="ns-sidebar-user-bar" />
@@ -83,9 +85,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
         </div>
       </aside>
 
-      {/* Main column */}
       <div className="ns-main">
-        {/* Subscription bar */}
         <div className="ns-subscription-bar">
           <span>8 days left! Activate your subscription now.</span>
           <button type="button" className="ns-subscription-btn">
@@ -93,7 +93,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
           </button>
         </div>
 
-        {/* Top header */}
         <header className="ns-main-header">
           <div className="ns-main-header-left">
             <h1 className="ns-main-header-title">Screens</h1>
@@ -112,7 +111,6 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
           </div>
         </header>
 
-        {/* Page content */}
         <main className="ns-main-content">{children}</main>
       </div>
     </div>
@@ -120,4 +118,3 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
 };
 
 export default MainLayout;
-

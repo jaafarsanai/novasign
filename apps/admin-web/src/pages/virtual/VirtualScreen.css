@@ -32,7 +32,7 @@
 }
 
 .red { background: #ef4444; }
-.yellow { background: #facc15; }
+.yellow { background: var(--brand-primary); }
 .green { background: #22c55e; }
 
 /* Content */

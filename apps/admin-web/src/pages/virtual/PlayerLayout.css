@@ -1,4 +1,4 @@
-/* Full-page gradient background, like ScreenCloud wall */
+/* Full-page gradient background */
 .virtual-screen-root {
   min-height: 100vh;
   margin: 0;
@@ -6,8 +6,8 @@
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   background:
-    radial-gradient(circle at top left, #2563eb 0, #020617 50%),
-    radial-gradient(circle at top right, #7c3aed 0, #020617 55%);
+    radial-gradient(circle at top left, #1da1f2 0, #071426 48%),
+    radial-gradient(circle at top right, #0a2342 0, #020617 58%);
   color: #f9fafb;
   display: flex;
   align-items: center;
@@ -40,7 +40,7 @@
   justify-content: center;
 }
 
-/* Yellow dot pill “NOVASIGN VIRTUAL SCREEN” */
+/* Brand pill */
 .virtual-pill {
   display: inline-flex;
   align-items: center;
@@ -61,7 +61,8 @@
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  background-color: #facc15;
+  background-color: var(--brand-primary);
+  box-shadow: 0 0 10px rgba(29, 161, 242, 0.6);
 }
 
 /* Title + subtitle */
@@ -85,8 +86,8 @@
   padding: 20px 28px 18px;
   border-radius: 18px;
   background: #020617;
-  border: 1px solid #111827;
-  box-shadow: inset 0 0 0 1px rgba(55, 65, 81, 0.8);
+  border: 1px solid #132238;
+  box-shadow: inset 0 0 0 1px rgba(38, 61, 89, 0.7);
   cursor: pointer;
   text-align: left;
   transition:
@@ -98,7 +99,7 @@
 .virtual-code-box:hover {
   box-shadow: 0 18px 45px rgba(15, 23, 42, 0.9);
   transform: translateY(-1px);
-  border-color: #facc15;
+  border-color: var(--brand-primary);
 }
 
 .virtual-code-text {
@@ -114,7 +115,7 @@
   color: #6b7280;
 }
 
-/* RIGHT SIDE – purple gradient area with QR */
+/* RIGHT SIDE */
 .virtual-card-right {
   flex: 2;
   display: flex;
@@ -123,7 +124,7 @@
 
 .virtual-qr-panel {
   flex: 1;
-  background: radial-gradient(circle at top left, #2563eb, #7c3aed);
+  background: radial-gradient(circle at top left, #36b4ff, #0a2342 70%);
   padding: 40px 40px 40px 32px;
   display: flex;
   flex-direction: column;
@@ -148,7 +149,7 @@
   line-height: 1.5;
 }
 
-/* FOOTER STRIP (white box under TV) */
+/* FOOTER STRIP */
 .virtual-footer {
   margin: 28px auto 0;
   max-width: 640px;
@@ -165,7 +166,7 @@
   width: 40px;
   height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #facc15, #f97316);
+  background: linear-gradient(135deg, #1da1f2, #0a2342);
   margin-right: 16px;
 }
 
@@ -216,4 +217,3 @@
     letter-spacing: 0.25em;
   }
 }
-

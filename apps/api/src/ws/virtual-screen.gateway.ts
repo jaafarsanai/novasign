@@ -7,7 +7,7 @@ import {
   WebSocketServer,
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
-import { WsStateService } from "./ws-state.service";
+import { WsStateService } from "../ws/ws-state.service";
 import { ScreensService } from "../screens/screens.service";
 
 @WebSocketGateway({
@@ -30,20 +30,31 @@ export class VirtualScreenGateway {
   }
 
   handleConnection(client: Socket) {
-    const code = String(client.handshake?.query?.code ?? "")
+    const code = String(client.handshake.query?.code ?? "").trim().toUpperCase();
+    const role = String(client.handshake.query?.role ?? "virtual")
       .trim()
-      .toUpperCase();
-    if (code) {
-      client.join(`code:${code}`);
+      .toLowerCase(); // "virtual" | "device"
+
+    (client.data as any).role = role;
+    (client.data as any).code = code;
+
+    // ✅ Only virtual tabs affect "virtual active" logic
+    if (role !== "device" && code) {
       this.screens.markVirtualConnected(code);
     }
   }
 
   handleDisconnect(client: Socket) {
-    const code = String(client.handshake?.query?.code ?? "")
+    const code =
+      String((client.data as any)?.code ?? client.handshake.query?.code ?? "")
+        .trim()
+        .toUpperCase();
+
+    const role = String((client.data as any)?.role ?? "virtual")
       .trim()
-      .toUpperCase();
-    if (code) {
+      .toLowerCase();
+
+    if (role !== "device" && code) {
       this.screens.markVirtualDisconnected(code);
     }
   }
@@ -56,24 +67,25 @@ export class VirtualScreenGateway {
     const code = String(body?.code ?? "").trim().toUpperCase();
     if (!code) return;
 
+    const role = String((client.data as any)?.role ?? "virtual")
+      .trim()
+      .toLowerCase();
+
+    (client.data as any).code = code;
+
     client.join(`code:${code}`);
-    this.screens.markVirtualConnected(code);
+
+    // ✅ CRITICAL: device must NOT mark virtual connected here
+    if (role !== "device") {
+      this.screens.markVirtualConnected(code);
+    }
 
     const s = await this.screens.getByPairingCodeOrNull(code);
     if (s) {
-      // keep "last seen" + admin snapshot update (fine)
       await this.screens.touchLastSeenById(s.id);
       await this.wsState.pushAdminScreenSnapshot(s.id);
     }
 
-    /**
-     * IMPORTANT:
-     * Do NOT call wsState.pushVirtualScreenBundleToClient() because it typically
-     * includes changing timestamps (Date.now()) that cause the virtual-screen UI
-     * to reset playback every ping.
-     *
-     * ✅ Instead, always emit the deterministic payloads from ScreensService.
-     */
     const state = await this.screens.getVirtualScreenStatePayload(code);
     const playlist = await this.screens.getVirtualScreenPlaylistPayload(code);
 

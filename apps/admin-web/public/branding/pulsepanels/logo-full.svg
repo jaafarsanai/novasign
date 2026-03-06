@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 360">
+  <g transform="translate(20,20)">
+    <g fill="none" stroke="#169AEF" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="58" y="62" width="336" height="212" rx="14" ry="14"/>
+      <path d="M30 168 H150 L170 120 L194 216 L228 64 L262 248 L300 122 L322 168 H420"/>
+      <path d="M178 326 H274"/>
+    </g>
+    <g font-family="Arial, Helvetica, sans-serif" font-weight="700" font-size="128" transform="translate(460,212)">
+      <text x="0" y="0">
+        <tspan fill="#05224B">Panel</tspan><tspan fill="#169AEF">Pulse</tspan>
+      </text>
+    </g>
+  </g>
+</svg>

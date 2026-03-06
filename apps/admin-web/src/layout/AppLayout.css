@@ -14,24 +14,30 @@
 
 .ns2-subscription-bar {
   height: 48px;
+  background: linear-gradient(90deg, var(--brand-primary), var(--brand-primary-dark));
+  color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 14px;
-  padding: 0 16px;
-  background: #facc15;
-  color: #111827;
-  font-weight: 700;
+  gap: 16px;
+  font-weight: 600;
+  border-bottom: 1px solid rgba(10, 35, 66, 0.08);
 }
 
 .ns2-subscribe-btn {
-  height: 30px;
-  padding: 0 12px;
+  background: #ffffff;
+  color: var(--brand-secondary);
+  border: 1px solid rgba(10, 35, 66, 0.08);
   border-radius: 999px;
-  border: 1px solid rgba(0,0,0,0.15);
-  background: rgba(255,255,255,0.6);
+  padding: 8px 18px;
+  font-weight: 700;
   cursor: pointer;
-  font-weight: 800;
+  transition: 0.2s ease;
+}
+
+.ns2-subscribe-btn:hover {
+  background: #f8fbff;
+  border-color: var(--brand-primary);
 }
 
 .ns2-content {

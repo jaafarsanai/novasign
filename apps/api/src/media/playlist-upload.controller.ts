@@ -70,7 +70,7 @@ export class PlaylistUploadController {
 
     for (const file of files) {
       const type = guessType(file.mimetype);
-      const publicUrl = `/media/${file.filename}`;
+      const publicUrl = `/api/media/${file.filename}`;
       const filePath = (file as any).path as string | undefined;
 
       // duration for images: default 5000ms unless body.durationMs

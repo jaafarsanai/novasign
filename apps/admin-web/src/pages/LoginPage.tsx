@@ -1,9 +1,10 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { brand } from "../config/brand";
 import "./LoginPage.css";
 
-const DUMMY_EMAIL = "admin@novasign.com";
-const DUMMY_PASSWORD = "novasign123";
+const DUMMY_EMAIL = brand.loginDemoEmail;
+const DUMMY_PASSWORD = brand.loginDemoPassword;
 
 const LoginPage: React.FC = () => {
   const navigate = useNavigate();
@@ -18,19 +19,17 @@ const LoginPage: React.FC = () => {
     setError(null);
     setIsSubmitting(true);
 
-    // Dummy auth – to be replaced later by real API / SSO
     setTimeout(() => {
       if (email === DUMMY_EMAIL && password === DUMMY_PASSWORD) {
-        navigate("/screens"); // adjust route name if needed
+        navigate("/screens");
       } else {
-        setError("Invalid credentials. Try admin@novasign.com / novasign123.");
+        setError(`Invalid credentials. Try ${DUMMY_EMAIL} / ${DUMMY_PASSWORD}.`);
       }
       setIsSubmitting(false);
     }, 500);
   };
 
   const handleSocialClick = (provider: string) => {
-    // For now, just show a console log – real SSO will come later
     console.log(`SSO with ${provider} not implemented yet.`);
   };
 
@@ -39,19 +38,18 @@ const LoginPage: React.FC = () => {
       <div className="login-page-gradient" />
 
       <div className="login-page-content">
-        {/* Left side: Logo + form */}
         <div className="login-card">
           <div className="login-logo-row">
             <div className="login-logo-icon">
-              <span className="login-logo-dot" />
+              <img src={brand.logoIcon} alt={brand.appName} className="login-logo-image" />
             </div>
             <div className="login-logo-text">
-              <span className="login-logo-title">Novasign</span>
-              <span className="login-logo-subtitle">Studio</span>
+              <span className="login-logo-title">{brand.appName}</span>
+              <span className="login-logo-subtitle">{brand.studioName}</span>
             </div>
           </div>
 
-          <h1 className="login-title">Log into Studio</h1>
+          <h1 className="login-title">Log into {brand.studioName}</h1>
           <p className="login-subtext">
             Don&apos;t have an account? <a href="#">Sign up</a>
           </p>
@@ -132,7 +130,6 @@ const LoginPage: React.FC = () => {
           </button>
         </div>
 
-        {/* Right side: Feature highlight */}
         <div className="login-feature">
           <div className="login-feature-card">
             <div className="login-feature-badge">Feature Highlight</div>
@@ -144,7 +141,7 @@ const LoginPage: React.FC = () => {
                   <span className="dot" />
                   <span className="dot" />
                   <span className="login-feature-window-title">
-                    Novasign Screens Manager
+                    {brand.appName} Screens Manager
                   </span>
                 </div>
                 <div className="login-feature-window-body">
@@ -162,7 +159,7 @@ const LoginPage: React.FC = () => {
             <div className="login-feature-text-block">
               <h2 className="login-feature-title">Full RDM in Screens Manager</h2>
               <p className="login-feature-text">
-                Manage all your Novasign screens and the devices that power them
+                Manage all your {brand.appName} screens and the devices that power them
                 from a single, intuitive dashboard. Control content, playlists and
                 status in real time.
               </p>
@@ -175,4 +172,3 @@ const LoginPage: React.FC = () => {
 };
 
 export default LoginPage;
-

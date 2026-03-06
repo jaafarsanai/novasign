@@ -34,45 +34,36 @@ function contentTypeFromPath(p: string) {
   }
 }
 
-/**
- * Serves /media/<key> with HTTP Range support (MP4 streaming)
- * IMPORTANT: This is separate from /api/media CRUD endpoints.
- */
 @Controller()
 export class MediaStreamController {
-  // TODO: change this to your real uploads folder
-  private readonly MEDIA_DIR = "/var/lib/novasign/media";
+  private readonly MEDIA_DIR = "/opt/novasign/storage/media";
 
   @Get("media/:key")
   async stream(@Param("key") key: string, @Req() req: Request, @Res() res: Response) {
     if (!key) throw new NotFoundException("Missing media key");
 
-    // Prevent path traversal
     const safeKey = path.basename(String(key));
     const filePath = path.join(this.MEDIA_DIR, safeKey);
 
-    if (!fs.existsSync(filePath)) throw new NotFoundException("Media not found");
+    if (!fs.existsSync(filePath)) {
+      throw new NotFoundException(`Media not found: ${safeKey}`);
+    }
 
     const stat = fs.statSync(filePath);
     const fileSize = stat.size;
-
     const range = req.headers.range;
     const contentType = contentTypeFromPath(filePath);
 
-    // Strongly recommended caching for static immutable assets
-    // (If you version filenames, you can keep immutable.)
     res.setHeader("Content-Type", contentType);
     res.setHeader("Accept-Ranges", "bytes");
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
 
-    // If no Range header -> full file
     if (!range) {
       res.setHeader("Content-Length", fileSize);
       fs.createReadStream(filePath).pipe(res);
       return;
     }
 
-    // Parse Range: bytes=start-end
     const match = /^bytes=(\d+)-(\d*)$/.exec(range);
     if (!match) {
       res.status(416).send("Invalid range");

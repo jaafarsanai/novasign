@@ -123,7 +123,7 @@ async listFolders(opts?: { parentId?: string }) {
       // Ensure a persisted filename exists.
       const persisted = await this.ensurePersistedFile(f);
 
-      const url = `/media/${persisted.filename}`;
+      const url = `/api/media/${persisted.filename}`;
 
       const key = `${String(f.originalname || "")}|${Number((f as any).size || 0)}`;
       const durationMs = type === "video" ? (metaMap.get(key) ?? null) : null;
@@ -262,7 +262,7 @@ async listFolders(opts?: { parentId?: string }) {
   private async tryDeleteDiskFile(url: string) {
     try {
       const u = String(url || "");
-      if (!u.startsWith("/media/")) return;
+      if (!u.startsWith("/api/media/")) return;
 
       const file = basename(u);
       if (!file || file.includes("..") || file.includes("/")) return;

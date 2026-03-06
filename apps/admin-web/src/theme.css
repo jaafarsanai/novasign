@@ -1,36 +1,26 @@
-/* ------------------------------------------------------------ */
-/* GLOBAL THEME – Same Look & Feel as ScreenCloud               */
-/* ------------------------------------------------------------ */
-
 :root {
-  --primary: #facc15;
-  --primary-dark: #d4a90f;
-  --primary-text: #111827;
+  --primary: var(--brand-primary);
+  --primary-dark: var(--brand-primary-dark);
+  --primary-text: #ffffff;
 
-  --sidebar-bg: #050816;
+  --sidebar-bg: var(--brand-sidebar-bg);
   --sidebar-hover: rgba(255,255,255,0.06);
-  --sidebar-text: #d1d5db;
+  --sidebar-text: var(--brand-sidebar-text);
 
-  --card-bg: #ffffff;
+  --card-bg: var(--brand-card-bg);
   --card-border: rgba(0,0,0,0.08);
   --card-radius: 14px;
 
-  --text-main: #111827;
-  --text-sub: #6b7280;
+  --text-main: var(--brand-text-main);
+  --text-sub: var(--brand-text-sub);
 
   --shadow-card: 0 4px 12px rgba(0,0,0,0.08);
   --shadow-card-strong: 0 12px 30px rgba(0,0,0,0.15);
 
   --radius: 14px;
-
   --font: "Inter", system-ui, sans-serif;
-
   --transition: 0.2s ease;
 }
-
-/* ------------------------------------------------------------ */
-/* GLOBAL RESET                                                 */
-/* ------------------------------------------------------------ */
 
 * {
   box-sizing: border-box;
@@ -38,14 +28,10 @@
 
 body {
   margin: 0;
-  background: #f5f7fb;
+  background: var(--brand-page-bg);
   color: var(--text-main);
   font-family: var(--font);
 }
-
-/* ------------------------------------------------------------ */
-/* LAYOUT: SIDEBAR + MAIN PANEL                                 */
-/* ------------------------------------------------------------ */
 
 .admin-root {
   display: flex;
@@ -83,10 +69,6 @@ body {
   color: var(--primary-text);
 }
 
-/* ------------------------------------------------------------ */
-/* PAGE STRUCTURE                                               */
-/* ------------------------------------------------------------ */
-
 .page {
   padding: 24px 40px;
 }
@@ -102,10 +84,6 @@ body {
   margin-bottom: 24px;
 }
 
-/* ------------------------------------------------------------ */
-/* BUTTONS                                                      */
-/* ------------------------------------------------------------ */
-
 .btn {
   padding: 10px 18px;
   border-radius: 999px;
@@ -118,7 +96,7 @@ body {
 
 .btn-primary {
   background: var(--primary);
-  color: #111;
+  color: #fff;
 }
 
 .btn-primary:hover {
@@ -152,10 +130,6 @@ body {
   background: rgba(239,68,68,0.1);
 }
 
-/* ------------------------------------------------------------ */
-/* CARD & PANEL                                                 */
-/* ------------------------------------------------------------ */
-
 .card {
   background: var(--card-bg);
   border-radius: var(--card-radius);
@@ -169,10 +143,6 @@ body {
   font-weight: 600;
   margin-bottom: 16px;
 }
-
-/* ------------------------------------------------------------ */
-/* TABLE                                                        */
-/* ------------------------------------------------------------ */
 
 .table {
   width: 100%;
@@ -190,10 +160,6 @@ body {
   padding: 12px 0;
   border-bottom: 1px solid rgba(0,0,0,0.05);
 }
-
-/* ------------------------------------------------------------ */
-/* MODAL STYLING                                                */
-/* ------------------------------------------------------------ */
 
 .modal-backdrop {
   position: fixed;
@@ -227,20 +193,12 @@ body {
   margin-bottom: 12px;
 }
 
-/* ------------------------------------------------------------ */
-/* EMPTY STATE                                                  */
-/* ------------------------------------------------------------ */
-
 .empty-state {
   padding: 40px;
   text-align: center;
   color: var(--text-sub);
   font-size: 16px;
 }
-
-/* ------------------------------------------------------------ */
-/* SCREEN CLOUD HERO SECTION                                    */
-/* ------------------------------------------------------------ */
 
 .sc-empty-state {
   padding-bottom: 40px;
@@ -281,10 +239,6 @@ body {
   margin-bottom: 18px;
 }
 
-/* ------------------------------------------------------------ */
-/* TUTORIAL VIDEO CARD                                          */
-/* ------------------------------------------------------------ */
-
 .sc-video-card {
   display: flex;
   gap: 16px;
@@ -316,4 +270,3 @@ body {
   font-size: 14px;
   color: var(--text-sub);
 }
-

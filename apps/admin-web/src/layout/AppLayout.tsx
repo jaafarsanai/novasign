@@ -1,12 +1,11 @@
 import React from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import Sidebar from "./Sidebar";
+import { brand } from "../config/brand";
 import "./AppLayout.css";
 
 const AppLayout: React.FC = () => {
   const { pathname } = useLocation();
-
-  // Hide the global subscription bar on playlists pages (per your requirement)
   const hideSubscriptionBar = pathname.startsWith("/playlists");
 
   return (
@@ -32,4 +31,3 @@ const AppLayout: React.FC = () => {
 };
 
 export default AppLayout;
-

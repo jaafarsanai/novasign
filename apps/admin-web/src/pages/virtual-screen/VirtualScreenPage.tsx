@@ -17,6 +17,8 @@ const DEFAULT_TRANSITION_MS = 500;
 
 type VSState = "PAIR" | "WAITING" | "PLAYING" | "UNKNOWN";
 
+type ScreenOrientation4 = "LANDSCAPE" | "LANDSCAPE_FLIPPED" | "PORTRAIT" | "PORTRAIT_FLIPPED";
+
 type VsStatePayload = {
   code: string;
   state: VSState;
@@ -25,6 +27,7 @@ type VsStatePayload = {
   exists: boolean;
   screenId: string | null;
   isVirtual: boolean;
+  orientation?: ScreenOrientation4;
 };
 
 type VsPlaylistItem = {
@@ -37,7 +40,6 @@ type VsPlaylistItem = {
   schedules?: ZoneItemSchedule[];
   schedule?: ZoneItemSchedule;
 
-  // (future-proof) if backend ever sends them per item
   transitionType?: string;
   transitionMs?: number;
 };
@@ -48,11 +50,11 @@ type ChannelTransition =
       type?: string; // Fade | Slide | Push | Wipe | Zoom
       durationSec?: number;
       durationMs?: number;
-      direction?: string; // Right/Left/Up/Down
-      easing?: string; // ease-in-out...
-      fadeColor?: string; // #000000
+      direction?: string;
+      easing?: string;
+      fadeColor?: string;
       zoom?: "in" | "out";
-      startScale?: number; // 0.9 ...
+      startScale?: number;
     }
   | null
   | undefined;
@@ -61,16 +63,13 @@ type VsPlaylistPayload = {
   code: string;
   playlistId: string | null;
   updatedAt: number;
-
-  // legacy fullscreen path
   items: VsPlaylistItem[];
-
-  // channel layout path
   channel?: {
     channelId: string;
     layoutId: string | null;
     zones: Record<string, unknown>;
-    transition?: ChannelTransition; // ✅ if backend includes it (Channel.transition)
+    transition?: ChannelTransition;
+    orientation?: "landscape" | "portrait";
   };
 };
 
@@ -91,34 +90,9 @@ function clampPct(n: number) {
   return Math.max(0, Math.min(100, n));
 }
 
-/**
- * Layout defs may be expressed as:
- * - percentages (0..100)
- * - normalized (0..1)
- * - pixels (1920x1080)
- */
-function toPct(v: unknown, axis: "x" | "y") {
-  const n = Number((v as any) ?? 0);
-  if (!Number.isFinite(n)) return 0;
-
-  // normalized 0..1
-  if (n >= 0 && n <= 1) return n * 100;
-
-  // already in pct 0..100
-  if (n >= 0 && n <= 100) return n;
-
-  // pixels
-  const denom = axis === "x" ? DESIGN_W : DESIGN_H;
-  return (n / denom) * 100;
-}
-
 function isVsPlaylistItem(x: any): x is VsPlaylistItem {
   return x && typeof x.id === "string" && (x.type === "image" || x.type === "video") && typeof x.url === "string";
 }
-
-/* =========================================================
-   Media index (cached) so channel zone items can resolve URLs
-========================================================= */
 
 type MediaRow = { id: string; url: string; type: "image" | "video"; name?: string; thumbnailUrl?: string };
 
@@ -139,7 +113,6 @@ async function ensureMediaIndex(): Promise<Record<string, MediaRow>> {
       const data = await res.json().catch(() => null);
       if (!data) continue;
 
-      // matches screenshot: { items: { items: [...] } }
       const list: any[] =
         (Array.isArray(data?.items?.items) && data.items.items) ||
         (Array.isArray(data?.items) && data.items) ||
@@ -180,11 +153,6 @@ function toDurationMs(x: any): number | undefined {
   return undefined;
 }
 
-/**
- * Accepts:
- *  A) already resolved: { id, type, url, durationMs|durationSec, schedules }
- *  B) channel zone items: { clientId, sourceId, sourceType, durationSec, schedules }
- */
 function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>): VsPlaylistItem[] {
   let arr: any[] = [];
 
@@ -194,8 +162,12 @@ function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>):
   return arr
     .filter((x) => x && typeof x === "object")
     .map((x) => {
-      // CASE A: already resolved (old shape OR your vs:bundle zones)
-      if (typeof (x as any).id === "string" && ((x as any).type === "image" || (x as any).type === "video") && typeof (x as any).url === "string") {
+      // CASE A: already resolved
+      if (
+        typeof (x as any).id === "string" &&
+        ((x as any).type === "image" || (x as any).type === "video") &&
+        typeof (x as any).url === "string"
+      ) {
         return {
           id: String((x as any).id),
           type: (x as any).type as "image" | "video",
@@ -209,7 +181,7 @@ function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>):
         } as VsPlaylistItem;
       }
 
-      // CASE B: ChannelZoneItem shape (accept any casing)
+      // CASE B: ChannelZoneItem shape
       const st = String((x as any).sourceType ?? "").toUpperCase();
       if (st !== "MEDIA") return null;
 
@@ -225,7 +197,11 @@ function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>):
         url: m.url,
         order: Number((x as any).order ?? 0),
         durationMs: toDurationMs(x),
-        schedules: Array.isArray((x as any).schedules) ? (x as any).schedules : (x as any).schedule ? [(x as any).schedule] : undefined,
+        schedules: Array.isArray((x as any).schedules)
+          ? (x as any).schedules
+          : (x as any).schedule
+            ? [(x as any).schedule]
+            : undefined,
         schedule: (x as any).schedule ?? undefined,
         transitionType: (x as any).transitionType ?? (x as any).transition ?? undefined,
         transitionMs: (x as any).transitionMs != null ? Number((x as any).transitionMs) : undefined,
@@ -238,7 +214,6 @@ function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>):
 function preloadImage(url: string, timeoutMs = 1500): Promise<void> {
   return new Promise((resolve) => {
     if (!url) return resolve();
-
     const img = new Image();
     let done = false;
 
@@ -284,7 +259,6 @@ function preloadVideo(url: string, timeoutMs = 2000): Promise<void> {
     };
 
     const t = window.setTimeout(finish, timeoutMs);
-
     const onDone = () => {
       window.clearTimeout(t);
       finish();
@@ -305,7 +279,6 @@ function preloadVideo(url: string, timeoutMs = 2000): Promise<void> {
 
 function normalizeTransitionType(t?: string | null) {
   const x = String(t ?? "").trim().toLowerCase();
-  // admin UI uses labels: Fade / Slide / Push / Wipe / Zoom
   if (x === "fade" || x === "slide" || x === "push" || x === "wipe" || x === "zoom") return x;
   return DEFAULT_TRANSITION_TYPE;
 }
@@ -317,13 +290,16 @@ function transitionMsFromChannel(tr?: ChannelTransition) {
       : tr?.durationSec != null
         ? Math.round(Number(tr.durationSec) * 1000)
         : (tr as any)?.duration != null
-          ? Math.round(Number((tr as any).duration) * 1000) // ✅ backend uses "duration" in seconds
+          ? Math.round(Number((tr as any).duration) * 1000)
           : undefined;
 
   return Number.isFinite(ms) ? Math.max(0, ms as number) : DEFAULT_TRANSITION_MS;
 }
 
-export default function VirtualScreenPage() {
+export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode?: string }) {
+  const embed = !!props?.embed;
+  const forcedCode = props?.pairingCode?.trim().toUpperCase() || "";
+
   const lastStateUpdatedAtRef = useRef<number>(-1);
   const lastPlaylistUpdatedAtRef = useRef<number>(-1);
 
@@ -341,16 +317,16 @@ export default function VirtualScreenPage() {
     }
   }, []);
 
-  // ===== Scale the whole “room” canvas =====
+  // Room scaling (non-embed only)
   const [scale, setScale] = useState(1);
-
   useLayoutEffect(() => {
+    if (embed) return;
+
     const calc = () => {
       const vv = window.visualViewport;
       const vw = vv?.width ?? window.innerWidth;
       const vh = vv?.height ?? window.innerHeight;
 
-      // cover scaling for the room background
       const s = Math.max(vw / DESIGN_W, vh / DESIGN_H);
       setScale(Number.isFinite(s) && s > 0 ? s : 1);
     };
@@ -365,7 +341,7 @@ export default function VirtualScreenPage() {
       window.visualViewport?.removeEventListener("resize", calc);
       window.visualViewport?.removeEventListener("scroll", calc);
     };
-  }, []);
+  }, [embed]);
 
   const [pairingCode, setPairingCode] = useState<string>("");
   const [sessionError, setSessionError] = useState<string | null>(null);
@@ -375,12 +351,11 @@ export default function VirtualScreenPage() {
 
   const sockRef = useRef<Socket | null>(null);
 
-  // ===== Legacy fullscreen playback state =====
+  // Playback state
   const [idx, setIdx] = useState(0);
   const timerRef = useRef<number | null>(null);
   const [refreshSeq, setRefreshSeq] = useState(0);
 
-  // Audio policy
   const soundEnabled = true;
 
   const [audioUnlocked, setAudioUnlocked] = useState<boolean>(() => {
@@ -395,11 +370,10 @@ export default function VirtualScreenPage() {
   const [forceMuted, setForceMuted] = useState<boolean>(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
-  // Stall detection (legacy video)
   const lastProgressAtRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
 
-  // ===== Channel playback state (per zone) =====
+  // Channel playback state
   const zoneTimersRef = useRef<Record<string, number>>({});
   const [zoneIdx, setZoneIdx] = useState<Record<string, number>>({});
   const zoneIdxRef = useRef<Record<string, number>>({});
@@ -407,7 +381,6 @@ export default function VirtualScreenPage() {
     zoneIdxRef.current = zoneIdx;
   }, [zoneIdx]);
 
-  // Two-layer swap state
   const [zoneActiveLayer, setZoneActiveLayer] = useState<Record<string, "a" | "b">>({});
   const zoneActiveLayerRef = useRef<Record<string, "a" | "b">>({});
   useEffect(() => {
@@ -429,24 +402,24 @@ export default function VirtualScreenPage() {
 
   const playingLegacy = vsState?.state === "PLAYING" && items.length > 0;
   const playingChannel = vsState?.state === "PLAYING" && hasChannel;
+  const isPlaying = (playingLegacy && items.length > 0) || playingChannel;
 
-  // ===== Schedules tick =====
+  // ===== Schedules tick
   const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
 
-  // ===== Load media index when we might need it =====
+  // Load media index only if channel exists
   const [mediaIndex, setMediaIndex] = useState<Record<string, MediaRow>>({});
   useEffect(() => {
     let cancelled = false;
-
     if (!hasChannel) return;
 
     (async () => {
-      const idx = await ensureMediaIndex();
-      if (!cancelled) setMediaIndex(idx);
+      const idx2 = await ensureMediaIndex().catch(() => ({}));
+      if (!cancelled) setMediaIndex(idx2);
     })();
 
     return () => {
@@ -454,7 +427,7 @@ export default function VirtualScreenPage() {
     };
   }, [hasChannel]);
 
-  // ===== Session bootstrap =====
+  // ===== Session bootstrap
   useEffect(() => {
     let cancelled = false;
 
@@ -463,6 +436,11 @@ export default function VirtualScreenPage() {
       setPairingCode("");
       setVsState(null);
       setVsPlaylist(null);
+
+      if (forcedCode) {
+        if (!cancelled) setPairingCode(forcedCode);
+        return;
+      }
 
       if (!sessionId) {
         setSessionError("Missing virtual session id.");
@@ -487,11 +465,12 @@ export default function VirtualScreenPage() {
     return () => {
       cancelled = true;
     };
-  }, [sessionId]);
+  }, [sessionId, forcedCode]);
 
-  // ===== Mark tab open =====
+  // Mark tab open (virtual-only)
   useEffect(() => {
-    if (!pairingCode) return;
+    if (!pairingCode || embed) return;
+
     lastStateUpdatedAtRef.current = -1;
     lastPlaylistUpdatedAtRef.current = -1;
 
@@ -511,9 +490,9 @@ export default function VirtualScreenPage() {
         localStorage.removeItem(key);
       } catch {}
     };
-  }, [pairingCode, sessionId]);
+  }, [pairingCode, sessionId, embed]);
 
-  // ===== Socket =====
+  // ===== Socket (role=device in embed)
   useEffect(() => {
     if (!pairingCode) return;
 
@@ -521,27 +500,23 @@ export default function VirtualScreenPage() {
       path: "/ws",
       withCredentials: true,
       transports: ["websocket", "polling"],
-      query: { code: pairingCode },
+      query: { code: pairingCode, role: embed ? "device" : "virtual" },
     });
 
     sockRef.current = s;
 
     const onState = (p: VsStatePayload) => {
       if (!p || String(p.code ?? "").toUpperCase() !== pairingCode) return;
-
       const ua = Number(p.updatedAt ?? 0);
       if (ua === lastStateUpdatedAtRef.current) return;
-
       lastStateUpdatedAtRef.current = ua;
       setVsState(p);
     };
 
     const onPlaylist = (p: VsPlaylistPayload) => {
       if (!p || String(p.code ?? "").toUpperCase() !== pairingCode) return;
-
       const ua = Number(p.updatedAt ?? 0);
       if (ua === lastPlaylistUpdatedAtRef.current) return;
-
       lastPlaylistUpdatedAtRef.current = ua;
       setVsPlaylist(p);
     };
@@ -553,7 +528,6 @@ export default function VirtualScreenPage() {
 
     const onRefresh = (evt: { code?: string; ts?: number }) => {
       if (!evt || String(evt.code ?? "").toUpperCase() !== pairingCode) return;
-
       setIdx(0);
       setZoneIdx({});
       setZoneActiveLayer({});
@@ -576,14 +550,13 @@ export default function VirtualScreenPage() {
       s.disconnect();
       sockRef.current = null;
     };
-  }, [pairingCode]);
+  }, [pairingCode, embed]);
 
-  // ===== Reset legacy index when items change =====
+  // Reset legacy index when items change
   useEffect(() => {
     setIdx(0);
   }, [vsPlaylist?.playlistId, items.length]);
 
-  // ===== Legacy fullscreen playback =====
   const currentItem = playingLegacy ? items[idx % items.length] : null;
 
   const mediaUrl = useMemo(() => {
@@ -591,7 +564,7 @@ export default function VirtualScreenPage() {
     const u = String(currentItem.url);
     const sep = u.includes("?") ? "&" : "?";
     if (!refreshSeq) return u;
-return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
+    return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
   }, [currentItem?.url, refreshSeq]);
 
   const advance = () => {
@@ -622,7 +595,6 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     };
   }, [playingLegacy, currentItem?.id, items.length]);
 
-  // Legacy video autoplay strategy
   useEffect(() => {
     if (!playingLegacy || currentItem?.type !== "video") return;
 
@@ -689,7 +661,7 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     };
   }, [playingLegacy, currentItem?.id, refreshSeq, audioUnlocked]);
 
-  // ===== Channel layout: find layout definition =====
+  // ===== Channel layout lookup
   const layoutDef = useMemo(() => {
     const layoutId = channel?.layoutId ? String(channel.layoutId) : "";
     if (!layoutId) return null;
@@ -701,10 +673,24 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     );
   }, [channel?.layoutId]);
 
-  // ===== Channel layout: compute zone rectangles =====
+  // Convert layout coords to %
+  function toPctAxis(v: unknown, axis: "x" | "y", designW: number, designH: number) {
+    const n = Number((v as any) ?? 0);
+    if (!Number.isFinite(n)) return 0;
+
+    if (n >= 0 && n <= 1) return n * 100;
+    if (n >= 0 && n <= 100) return n;
+
+    const denom = axis === "x" ? designW : designH;
+    return (n / denom) * 100;
+  }
+
+  const channelOrientation = String((channel as any)?.orientation ?? "landscape");
+  const layoutDesignW = channelOrientation === "portrait" ? 1080 : 1920;
+  const layoutDesignH = channelOrientation === "portrait" ? 1920 : 1080;
+
   const zoneRects = useMemo<ZoneRect[]>(() => {
     if (!layoutDef) return [];
-
     const zones = (layoutDef as any)?.zones;
     if (!Array.isArray(zones)) return [];
 
@@ -718,16 +704,16 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
         const w = z?.w ?? z?.width ?? 0;
         const h = z?.h ?? z?.height ?? 0;
 
-        const leftPct = clampPct(toPct(x, "x"));
-        const topPct = clampPct(toPct(y, "y"));
-        const widthPct = clampPct(toPct(w, "x"));
-        const heightPct = clampPct(toPct(h, "y"));
+        const leftPct = clampPct(toPctAxis(x, "x", layoutDesignW, layoutDesignH));
+        const topPct = clampPct(toPctAxis(y, "y", layoutDesignW, layoutDesignH));
+        const widthPct = clampPct(toPctAxis(w, "x", layoutDesignW, layoutDesignH));
+        const heightPct = clampPct(toPctAxis(h, "y", layoutDesignW, layoutDesignH));
 
         if (widthPct <= 0 || heightPct <= 0) return null;
         return { id, leftPct, topPct, widthPct, heightPct };
       })
       .filter((x: ZoneRect | null): x is ZoneRect => !!x);
-  }, [layoutDef]);
+  }, [layoutDef, layoutDesignW, layoutDesignH]);
 
   const withRefresh = useCallback(
     (url: string) => {
@@ -739,7 +725,7 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     [refreshSeq]
   );
 
-  // ===== Normalize channel zones into arrays + schedule filter =====
+  // Normalize channel zones + schedule filter
   const zoneItemsMap = useMemo(() => {
     const rawZones = channel?.zones ?? {};
     const map: Record<string, VsPlaylistItem[]> = {};
@@ -760,7 +746,6 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
         try {
           return schedules.some((s) => isScheduleActive(s, now));
         } catch {
-          // if schedule parsing fails, DON'T kill the item
           return true;
         }
       });
@@ -776,7 +761,6 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     zoneItemsMapRef.current = zoneItemsMap;
   }, [zoneItemsMap]);
 
-  // A signature that changes ONLY when the zone lists change (ids/lengths), not each tick
   const zoneListSig = useMemo(() => {
     const keys = Object.keys(zoneItemsMap).sort();
     const parts = keys.map((k) => {
@@ -787,22 +771,18 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     return parts.join("|");
   }, [zoneItemsMap]);
 
-  // ===== fullscreen override =====
-  type FullscreenPick = { zoneId: string; item: VsPlaylistItem } | null;
-  const fullscreen = useMemo((): FullscreenPick => {
+  const fullscreen = useMemo(() => {
     const now = new Date(nowTick || Date.now());
-    return pickFullscreenOverride(zoneItemsMap as any, now) as FullscreenPick;
+    return pickFullscreenOverride(zoneItemsMap as any, now) as { zoneId: string; item: VsPlaylistItem } | null;
   }, [zoneItemsMap, nowTick]);
 
-  // Signature used to reset playback when playlist changes (✅ stable)
   const channelSig = useMemo(() => {
     const cid = channel?.channelId ?? "";
     const lid = channel?.layoutId ?? "";
-    const ua = vsPlaylist?.updatedAt ?? 0; // changes only when server pushes new content
+    const ua = vsPlaylist?.updatedAt ?? 0;
     return `${cid}|${lid}|${ua}|${refreshSeq}`;
   }, [channel?.channelId, channel?.layoutId, vsPlaylist?.updatedAt, refreshSeq]);
 
-  // ===== Init zone indices once per channelSig =====
   useEffect(() => {
     for (const k of Object.keys(zoneTimersRef.current)) window.clearTimeout(zoneTimersRef.current[k]);
     zoneTimersRef.current = {};
@@ -848,7 +828,6 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playingChannel, channelSig]);
 
-  // ===== Reconcile when zone list REALLY changes (fixes z1 stuck after list changes) =====
   useEffect(() => {
     if (!playingChannel) return;
 
@@ -896,14 +875,11 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
       return next;
     });
 
-    // Clear pending flags for removed zones
     for (const zid of Object.keys(zonePendingAdvanceRef.current)) {
       if (!(zid in zoneItemsMap)) delete zonePendingAdvanceRef.current[zid];
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoneListSig, playingChannel]);
 
-  // ===== Preload initial layers (removes black on first swaps) =====
   useEffect(() => {
     if (!playingChannel) return;
 
@@ -928,10 +904,8 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     })();
   }, [playingChannel, zoneListSig, withRefresh, zoneItemsMap]);
 
-  // ===== Transition getters (channel-level unless backend later sends per-item) =====
   const getTransType = useCallback(
     (zid: string) => {
-      // per-item overrides if ever present
       const arr = zoneItemsMapRef.current[zid] ?? [];
       const len = arr.length;
       const cur = len ? arr[(zoneIdxRef.current[zid] ?? 0) % len] : null;
@@ -941,7 +915,6 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
       if (!chEnabled) return "cut";
 
       const chType = normalizeTransitionType(channelTransition?.type ?? DEFAULT_TRANSITION_TYPE);
-
       return itemType ?? chType ?? DEFAULT_TRANSITION_TYPE;
     },
     [channelTransition]
@@ -949,7 +922,6 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
 
   const getTransMs = useCallback(
     (zid: string) => {
-      // per-item overrides if ever present
       const arr = zoneItemsMapRef.current[zid] ?? [];
       const len = arr.length;
       const cur = len ? arr[(zoneIdxRef.current[zid] ?? 0) % len] : null;
@@ -961,118 +933,177 @@ return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
     [channelTransition]
   );
 
- // ===== Advance with preload + swap =====
-const requestAdvance = useCallback(
-  async (zid: string) => {
-    const arr = zoneItemsMapRef.current[zid] ?? [];
-    const len = arr.length;
-    if (len <= 1) return;
+  const requestAdvance = useCallback(
+    async (zid: string) => {
+      const arr = zoneItemsMapRef.current[zid] ?? [];
+      const len = arr.length;
+      if (len <= 1) return;
 
-    if (zonePendingAdvanceRef.current[zid]) return;
-    zonePendingAdvanceRef.current[zid] = true;
+      if (zonePendingAdvanceRef.current[zid]) return;
+      zonePendingAdvanceRef.current[zid] = true;
 
-    try {
-      const curIdx = (zoneIdxRef.current[zid] ?? 0) % len;
-      const nextIdx = (curIdx + 1) % len;
+      try {
+        const curIdx = (zoneIdxRef.current[zid] ?? 0) % len;
+        const nextIdx = (curIdx + 1) % len;
 
-      const active = zoneActiveLayerRef.current[zid] ?? "a";
-      const inactive: "a" | "b" = active === "a" ? "b" : "a";
+        const active = zoneActiveLayerRef.current[zid] ?? "a";
+        const inactive: "a" | "b" = active === "a" ? "b" : "a";
 
-      // set inactive layer to next idx
-      setZoneLayerIdx((prev) => {
-        const cur = prev[zid] ?? { a: curIdx, b: nextIdx };
-        return { ...prev, [zid]: { ...cur, [inactive]: nextIdx } };
-      });
+        setZoneLayerIdx((prev) => {
+          const cur = prev[zid] ?? { a: curIdx, b: nextIdx };
+          return { ...prev, [zid]: { ...cur, [inactive]: nextIdx } };
+        });
 
-      const nextItem = arr[nextIdx];
-      const nextUrl = withRefresh(nextItem.url);
+        const nextItem = arr[nextIdx];
+        const nextUrl = withRefresh(nextItem.url);
 
-      // preload next (never throw, but keep inside try anyway)
-      if (nextItem.type === "image") await preloadImage(nextUrl);
-      else await preloadVideo(nextUrl);
+        if (nextItem.type === "image") await preloadImage(nextUrl);
+        else await preloadVideo(nextUrl);
 
-      const tType = getTransType(zid);
-      const msRaw = getTransMs(zid);
-      const transMs = tType === "cut" ? 0 : Math.max(0, Number(msRaw ?? DEFAULT_TRANSITION_MS));
+        const tType = getTransType(zid);
+        const msRaw = getTransMs(zid);
+        const transMs = tType === "cut" ? 0 : Math.max(0, Number(msRaw ?? DEFAULT_TRANSITION_MS));
 
-      if (transMs <= 0) {
-        setZoneIdx((p) => ({ ...p, [zid]: nextIdx }));
-        setZoneActiveLayer((p) => ({ ...p, [zid]: inactive }));
-        setZoneSwap((p) => ({ ...p, [zid]: false }));
-        return;
+        if (transMs <= 0) {
+          setZoneIdx((p) => ({ ...p, [zid]: nextIdx }));
+          setZoneActiveLayer((p) => ({ ...p, [zid]: inactive }));
+          setZoneSwap((p) => ({ ...p, [zid]: false }));
+          zonePendingAdvanceRef.current[zid] = false;
+          return;
+        }
+
+        setZoneSwap((p) => ({ ...p, [zid]: true }));
+
+        window.setTimeout(() => {
+          setZoneIdx((p) => ({ ...p, [zid]: nextIdx }));
+          setZoneActiveLayer((p) => ({ ...p, [zid]: inactive }));
+          setZoneSwap((p) => ({ ...p, [zid]: false }));
+          zonePendingAdvanceRef.current[zid] = false;
+        }, transMs);
+      } catch {
+        zonePendingAdvanceRef.current[zid] = false;
+      }
+    },
+    [getTransMs, getTransType, withRefresh]
+  );
+
+  useEffect(() => {
+    if (!playingChannel) return;
+
+    const map = zoneItemsMapRef.current;
+
+    for (const zid of Object.keys(map)) {
+      const zoneItems = map[zid] ?? [];
+
+      if (zoneItems.length <= 1) {
+        if (zoneTimersRef.current[zid]) {
+          window.clearTimeout(zoneTimersRef.current[zid]);
+          delete zoneTimersRef.current[zid];
+        }
+        zoneTimerItemRef.current[zid] = "";
+        continue;
       }
 
-      setZoneSwap((p) => ({ ...p, [zid]: true }));
+      const zi = (zoneIdxRef.current[zid] ?? 0) % zoneItems.length;
+      const cur = zoneItems[zi];
+      if (!cur) continue;
 
-      window.setTimeout(() => {
-        setZoneIdx((p) => ({ ...p, [zid]: nextIdx }));
-        setZoneActiveLayer((p) => ({ ...p, [zid]: inactive }));
-        setZoneSwap((p) => ({ ...p, [zid]: false }));
-        zonePendingAdvanceRef.current[zid] = false; // ✅ clear when done
-      }, transMs);
-    } catch {
-      // swallow
-    } finally {
-      // ✅ IMPORTANT: if we didn't schedule a timeout (because of error), don't freeze the zone
-      if (zonePendingAdvanceRef.current[zid]) {
-        // If swap is not active, clear immediately.
-        // If swap is active, the timeout will clear it.
-        // This makes sure we never stay stuck forever.
-        if (!zoneSwap[zid]) zonePendingAdvanceRef.current[zid] = false;
+      if (cur.type !== "image") {
+        if (zoneTimersRef.current[zid]) {
+          window.clearTimeout(zoneTimersRef.current[zid]);
+          delete zoneTimersRef.current[zid];
+        }
+        zoneTimerItemRef.current[zid] = cur.id;
+        continue;
       }
-    }
-  },
-  [getTransMs, getTransType, withRefresh, zoneSwap]
-);
-  // ===== Arm image timers per-zone (rotation) =====
-useEffect(() => {
-  if (!playingChannel) return;
 
-  const map = zoneItemsMapRef.current;
+      if (zoneTimerItemRef.current[zid] === cur.id && zoneTimersRef.current[zid]) continue;
 
-  for (const zid of Object.keys(map)) {
-    const zoneItems = map[zid] ?? [];
-
-    if (zoneItems.length <= 1) {
       if (zoneTimersRef.current[zid]) {
         window.clearTimeout(zoneTimersRef.current[zid]);
         delete zoneTimersRef.current[zid];
       }
-      zoneTimerItemRef.current[zid] = "";
-      continue;
-    }
 
-    const zi = (zoneIdxRef.current[zid] ?? 0) % zoneItems.length;
-    const cur = zoneItems[zi];
-    if (!cur) continue;
-
-    // Only arm timers for images (videos advance via onEnded)
-    if (cur.type !== "image") {
-      if (zoneTimersRef.current[zid]) {
-        window.clearTimeout(zoneTimersRef.current[zid]);
-        delete zoneTimersRef.current[zid];
-      }
       zoneTimerItemRef.current[zid] = cur.id;
-      continue;
+
+      const ms = Math.max(500, Number(cur.durationMs ?? 5000));
+      zoneTimersRef.current[zid] = window.setTimeout(() => {
+        void requestAdvance(zid);
+      }, ms);
     }
+  }, [playingChannel, zoneListSig, channelSig, requestAdvance]);
 
-    // If timer is already armed for this exact item, do nothing
-    if (zoneTimerItemRef.current[zid] === cur.id && zoneTimersRef.current[zid]) continue;
+  // ===== Adaptive rotation + COVER scale (kills letterboxing) =====
+const playerRef = useRef<HTMLDivElement | null>(null);
+const [playerBox, setPlayerBox] = useState({ w: 1, h: 1 });
 
-    // Otherwise, clear only THIS zone timer and re-arm it
-    if (zoneTimersRef.current[zid]) {
-      window.clearTimeout(zoneTimersRef.current[zid]);
-      delete zoneTimersRef.current[zid];
-    }
+// measure the real visible box
+useLayoutEffect(() => {
+  const el = playerRef.current;
+  if (!el) return;
 
-    zoneTimerItemRef.current[zid] = cur.id;
+  let raf = 0;
 
-    const ms = Math.max(500, Number(cur.durationMs ?? 5000));
-    zoneTimersRef.current[zid] = window.setTimeout(() => {
-      void requestAdvance(zid);
-    }, ms);
-  }
-}, [playingChannel, zoneListSig, channelSig, requestAdvance]);
+  const measure = () => {
+    const r = el.getBoundingClientRect();
+    setPlayerBox({ w: Math.max(1, r.width), h: Math.max(1, r.height) });
+  };
+
+  const schedule = () => {
+    if (raf) cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(measure);
+  };
+
+  measure();
+  window.addEventListener("resize", schedule);
+  window.addEventListener("orientationchange", schedule);
+  window.visualViewport?.addEventListener("resize", schedule);
+  window.visualViewport?.addEventListener("scroll", schedule);
+
+  return () => {
+    if (raf) cancelAnimationFrame(raf);
+    window.removeEventListener("resize", schedule);
+    window.removeEventListener("orientationchange", schedule);
+    window.visualViewport?.removeEventListener("resize", schedule);
+    window.visualViewport?.removeEventListener("scroll", schedule);
+  };
+}, [embed, scale, isPlaying, vsState?.orientation]);
+
+const screenOrientation = ((vsState as any)?.orientation ?? "LANDSCAPE") as ScreenOrientation4;
+const desiredBase: "landscape" | "portrait" = String(screenOrientation).startsWith("PORTRAIT") ? "portrait" : "landscape";
+const isFlipped = String(screenOrientation).endsWith("_FLIPPED");
+
+// what the viewport currently is
+const viewportBase: "landscape" | "portrait" = playerBox.w >= playerBox.h ? "landscape" : "portrait";
+
+// rotate ONLY if viewport base != desired base
+const baseRot = viewportBase === desiredBase ? 0 : desiredBase === "portrait" ? 90 : 270;
+const rotDeg = (baseRot + (isFlipped ? 180 : 0)) % 360;
+
+// design canvas
+const contentDesignW = desiredBase === "portrait" ? 1080 : 1920;
+const contentDesignH = desiredBase === "portrait" ? 1920 : 1080;
+
+// bounding box after rotation
+const swap = rotDeg % 180 !== 0;
+const rotW = swap ? contentDesignH : contentDesignW;
+const rotH = swap ? contentDesignW : contentDesignH;
+
+// ✅ COVER (no borders). Overscan removes 1px gaps
+const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) * 1.02;
+
+const stageStyle = useMemo<React.CSSProperties>(() => {
+  return {
+    position: "absolute",
+    left: "50%",
+    top: "50%",
+    width: `${contentDesignW}px`,
+    height: `${contentDesignH}px`,
+    transformOrigin: "center center",
+    transform: `translate(-50%, -50%) rotate(${rotDeg}deg) scale(${s})`,
+    overflow: "hidden",
+  };
+}, [contentDesignW, contentDesignH, rotDeg, s]);
 
   const codeForUi = pairingCode || "— — — — —";
 
@@ -1081,208 +1112,265 @@ useEffect(() => {
 
   const tvClass = `vs-tv ${(playingLegacy && currentItem) || playingChannel ? "vs-tv--media" : ""}`;
 
+  // HARD FORCE fill styles (do NOT rely on CSS classes)
+  const videoFillStyle = useMemo<React.CSSProperties>(
+    () => ({
+      position: "absolute",
+      inset: 0,
+      width: "100%",
+      height: "100%",
+      minWidth: "100%",
+      minHeight: "100%",
+      objectFit: "fill",
+      display: "block",
+      backgroundColor: "#000",
+    }),
+    []
+  );
+
+  const bgFillBase = useMemo<React.CSSProperties>(
+    () => ({
+      position: "absolute",
+      inset: 0,
+      backgroundPosition: "center",
+      backgroundRepeat: "no-repeat",
+      backgroundSize: "100% 100%",
+    }),
+    []
+  );
+
+  const renderImageFill = (url: string, key: string) => {
+    const src = withRefresh(url);
+    return <div key={key} style={{ ...bgFillBase, backgroundImage: `url("${src}")` }} />;
+  };
+
+  // Shared renderer used by BOTH embed and non-embed
+  const renderPlayback = () => {
+    if (!isPlaying) return null;
+
+    // CHANNEL
+    if (playingChannel && channel && layoutDef && zoneRects.length > 0) {
+      if (fullscreen) {
+        const fsItem = fullscreen?.item;
+        if (!fsItem || !isVsPlaylistItem(fsItem)) return null;
+
+        return (
+          <div className="vs-zoneStage" style={{ position: "absolute", inset: 0 }}>
+            <div className="vs-zone" style={{ left: "0%", top: "0%", width: "100%", height: "100%", overflow: "hidden" }}>
+              {fsItem.type === "video" ? (
+                <video
+                  key={`fs-${fsItem.id}-${refreshSeq}`}
+                  style={videoFillStyle}
+                  src={withRefresh(fsItem.url)}
+                  autoPlay
+                  playsInline
+                  preload="auto"
+                  muted={!(soundEnabled && audioUnlocked)}
+                  controls={false}
+                  loop
+                />
+              ) : (
+                renderImageFill(fsItem.url, `fsimg-${fsItem.id}-${refreshSeq}`)
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div className="vs-zoneStage" style={{ position: "absolute", inset: 0 }}>
+          {zoneRects.map((z: ZoneRect) => {
+            const arr = zoneItemsMap[z.id] ?? [];
+            if (!arr.length) return null;
+
+            const li = zoneLayerIdx[z.id] ?? { a: 0, b: Math.min(1, arr.length - 1) };
+            const itemA = arr[(li.a ?? 0) % arr.length];
+            const itemB = arr[(li.b ?? 0) % arr.length];
+            if (!itemA?.url || !itemB?.url) return null;
+
+            const activeLayer = zoneActiveLayer[z.id] ?? "a";
+            const swapNow = !!zoneSwap[z.id];
+
+            const bump = () => void requestAdvance(z.id);
+
+            const tType = getTransType(z.id);
+            const tMs = getTransMs(z.id);
+
+            return (
+              <div
+                key={z.id}
+                className={`vs-zone ${swapNow ? "vs-swap" : ""} ${tType ? `vs-trans-${tType}` : ""}`}
+                data-active={activeLayer}
+                style={{
+                  left: `${z.leftPct}%`,
+                  top: `${z.topPct}%`,
+                  width: `${z.widthPct}%`,
+                  height: `${z.heightPct}%`,
+                  overflow: "hidden",
+                  ["--vs-trans-ms" as any]: `${tMs}ms`,
+                  ["--vs-dir" as any]: String(channelTransition?.direction ?? "Right"),
+                  ["--vs-easing" as any]: String(channelTransition?.easing ?? "ease-in-out"),
+                  ["--vs-fade" as any]: String(channelTransition?.fadeColor ?? "#000000"),
+                  ["--vs-zoom" as any]: String(channelTransition?.zoom ?? "in"),
+                  ["--vs-start-scale" as any]: String(channelTransition?.startScale ?? 0.9),
+                }}
+              >
+                <div className="vs-layer layer-a" style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+                  {itemA.type === "video" ? (
+                    <video
+                      key={`a-${z.id}-${itemA.id}-${refreshSeq}`}
+                      style={videoFillStyle}
+                      src={withRefresh(itemA.url)}
+                      autoPlay
+                      playsInline
+                      preload="auto"
+                      muted={!(soundEnabled && audioUnlocked)}
+                      controls={false}
+                      loop={arr.length === 1}
+                      onEnded={arr.length === 1 ? undefined : bump}
+                      onError={arr.length === 1 ? undefined : bump}
+                      onAbort={arr.length === 1 ? undefined : bump}
+                      onStalled={arr.length === 1 ? undefined : bump}
+                    />
+                  ) : (
+                    renderImageFill(itemA.url, `aimg-${z.id}-${itemA.id}-${refreshSeq}`)
+                  )}
+                </div>
+
+                <div className="vs-layer layer-b" style={{ position: "absolute", inset: 0, overflow: "hidden" }}>
+                  {itemB.type === "video" ? (
+                    <video
+                      key={`b-${z.id}-${itemB.id}-${refreshSeq}`}
+                      style={videoFillStyle}
+                      src={withRefresh(itemB.url)}
+                      autoPlay
+                      playsInline
+                      preload="auto"
+                      muted={!(soundEnabled && audioUnlocked)}
+                      controls={false}
+                      loop={false}
+                      onEnded={bump}
+                      onError={bump}
+                      onAbort={bump}
+                      onStalled={bump}
+                    />
+                  ) : (
+                    renderImageFill(itemB.url, `bimg-${z.id}-${itemB.id}-${refreshSeq}`)
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      );
+    }
+
+    // LEGACY FULLSCREEN
+    if (currentItem?.type === "video") {
+      return (
+        <div className="vs-videoWrap" style={{ position: "absolute", inset: 0 }}>
+          <video
+            ref={videoRef}
+            key={`${currentItem.id}-${refreshSeq}`}
+            style={videoFillStyle}
+            src={mediaUrl}
+            autoPlay
+            playsInline
+            preload="auto"
+            muted={forceMuted || !(soundEnabled && audioUnlocked)}
+            controls={false}
+            loop={items.length === 1}
+            onEnded={items.length === 1 ? undefined : advance}
+            onError={advance}
+          />
+
+          {!audioUnlocked && needsAudioClick && (
+            <button
+              type="button"
+              className="vs-soundCta"
+              onClick={async () => {
+                setNeedsAudioClick(false);
+                setForceMuted(false);
+                setAudioUnlocked(true);
+                try {
+                  localStorage.setItem("ns2:vs-audio-unlocked", "1");
+                } catch {}
+
+                const v = videoRef.current;
+                if (v) {
+                  v.muted = false;
+                  try {
+                    await v.play();
+                  } catch {
+                    setNeedsAudioClick(true);
+                  }
+                }
+              }}
+            >
+              Enable sound
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    if (currentItem?.type === "image" && currentItem.url) {
+      return renderImageFill(currentItem.url, `legacyimg-${currentItem.id}-${refreshSeq}`);
+    }
+
+    return null;
+  };
+
+  const playerCommonStyle: React.CSSProperties = { position: "relative", width: "100%", height: "100%", overflow: "hidden" };
+  const frameCommonStyle: React.CSSProperties = { position: "absolute", inset: 0, overflow: "hidden" };
+
+  if (embed) {
+    return (
+      <div className="vs-root vs-embed">
+        <div ref={playerRef} className="vs-player vs-player--embed" style={playerCommonStyle}>
+          <div className="vs-contentFrame" style={frameCommonStyle}>
+            <div className="vs-contentStage" style={stageStyle}>
+              {renderPlayback()}
+            </div>
+          </div>
+
+          {!isPlaying && (
+            <div className="vs-embedOverlay">
+              <div className="vs-embedTitle">{vsState?.state === "WAITING" ? "Paired" : "Pair this device"}</div>
+              <div className="vs-embedCode">{codeForUi}</div>
+              <div className="vs-embedHint">Dashboard → Screens → Pair screen → enter this code</div>
+
+              <div className="vs-embedStatus">
+                {sessionError ? (
+                  <span className="vs-embedErr">{sessionError}</span>
+                ) : emptyPlaylistMsg ? (
+                  <span>{emptyPlaylistMsg}</span>
+                ) : vsState?.state === "WAITING" ? (
+                  <span>Waiting for content assignment…</span>
+                ) : (
+                  <span>Waiting for pairing…</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="vs-root">
       <div className="vs-canvas" style={{ ["--vs-scale" as any]: scale }}>
         <div className="vs-bg" aria-hidden />
 
         <div className={tvClass}>
-          {(playingLegacy && currentItem) || playingChannel ? (
-            <div className="vs-player">
-              {/* ===== CHANNEL PATH ===== */}
-              {playingChannel && channel && layoutDef && zoneRects.length > 0 ? (
-                fullscreen ? (
-                  (() => {
-                    const fsItem = fullscreen?.item;
-                    if (!fsItem || !isVsPlaylistItem(fsItem)) return null;
-
-                    return (
-                      <div className="vs-zoneStage">
-                        <div className="vs-zone" style={{ left: "0%", top: "0%", width: "100%", height: "100%" }}>
-                          {fsItem.type === "video" ? (
-                            <video
-                              key={`fs-${fsItem.id}-${refreshSeq}`}
-                              className="vs-media"
-                              src={withRefresh(fsItem.url)}
-                              autoPlay
-                              playsInline
-                              preload="auto"
-                              muted={!(soundEnabled && audioUnlocked)}
-                              controls={false}
-                              loop
-                            />
-                          ) : (
-                            <img key={`fs-${fsItem.id}-${refreshSeq}`} className="vs-media" src={withRefresh(fsItem.url)} alt="" draggable={false} />
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })()
-                ) : (
-                  <div className="vs-zoneStage">
-                    {zoneRects.map((z: ZoneRect) => {
-                      const arr = zoneItemsMap[z.id] ?? [];
-                      if (!arr.length) return null;
-
-                      const li = zoneLayerIdx[z.id] ?? { a: 0, b: Math.min(1, arr.length - 1) };
-                      const itemA = arr[(li.a ?? 0) % arr.length];
-                      const itemB = arr[(li.b ?? 0) % arr.length];
-                      if (!itemA?.url || !itemB?.url) return null;
-
-                      const activeLayer = zoneActiveLayer[z.id] ?? "a";
-                      const swap = !!zoneSwap[z.id];
-
-                      const bump = () => void requestAdvance(z.id);
-
-                      const tType = getTransType(z.id);
-                      const tMs = getTransMs(z.id);
-
-                      return (
-                        <div
-                          key={z.id}
-                          className={`vs-zone ${swap ? "vs-swap" : ""} ${tType ? `vs-trans-${tType}` : ""}`}
-                          data-active={activeLayer}
-                          style={{
-                            left: `${z.leftPct}%`,
-                            top: `${z.topPct}%`,
-                            width: `${z.widthPct}%`,
-                            height: `${z.heightPct}%`,
-                            ["--vs-trans-ms" as any]: `${tMs}ms`,
-                            // (optional vars for future CSS if you add slide/push/wipe/zoom)
-                            ["--vs-dir" as any]: String(channelTransition?.direction ?? "Right"),
-                            ["--vs-easing" as any]: String(channelTransition?.easing ?? "ease-in-out"),
-                            ["--vs-fade" as any]: String(channelTransition?.fadeColor ?? "#000000"),
-                            ["--vs-zoom" as any]: String(channelTransition?.zoom ?? "in"),
-                            ["--vs-start-scale" as any]: String(channelTransition?.startScale ?? 0.9),
-                          }}
-                        >
-                          {/* Layer A */}
-                          <div className="vs-layer layer-a">
-                            {itemA.type === "video" ? (
-                              <video
-                                key={`a-${z.id}-${itemA.id}-${refreshSeq}`}
-                                className="vs-media"
-                                src={withRefresh(itemA.url)}
-                                autoPlay
-                                playsInline
-                                preload="auto"
-                                muted={!(soundEnabled && audioUnlocked)}
-                                controls={false}
-                                loop={arr.length === 1}
-                                onEnded={arr.length === 1 ? undefined : bump}
-                                onError={arr.length === 1 ? undefined : bump}
-                                onAbort={arr.length === 1 ? undefined : bump}
-                                onStalled={arr.length === 1 ? undefined : bump}
-                              />
-                            ) : (
-                              <img
-                                key={`a-${z.id}-${itemA.id}-${refreshSeq}`}
-                                className="vs-media"
-                                src={withRefresh(itemA.url)}
-                                alt=""
-                                draggable={false}
-                                loading="eager"
-                                decoding="async"
-                                onError={bump}
-                              />
-                            )}
-                          </div>
-
-                          {/* Layer B */}
-                          <div className="vs-layer layer-b">
-                            {itemB.type === "video" ? (
-                              <video
-                                key={`b-${z.id}-${itemB.id}-${refreshSeq}`}
-                                className="vs-media"
-                                src={withRefresh(itemB.url)}
-                                autoPlay
-                                playsInline
-                                preload="auto"
-                                muted={!(soundEnabled && audioUnlocked)}
-                                controls={false}
-                                loop={false}
-                                onEnded={bump}
-                                onError={bump}
-                                onAbort={bump}
-                                onStalled={bump}
-                              />
-                            ) : (
-                              <img
-                                key={`b-${z.id}-${itemB.id}-${refreshSeq}`}
-                                className="vs-media"
-                                src={withRefresh(itemB.url)}
-                                alt=""
-                                draggable={false}
-                                loading="eager"
-                                decoding="async"
-                                onError={bump}
-                              />
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )
-              ) : (
-                <>
-                  {/* ===== LEGACY FULLSCREEN PATH ===== */}
-                  {currentItem?.type === "video" ? (
-                    <div className="vs-videoWrap">
-                      <video
-                        ref={videoRef}
-                        key={`${currentItem.id}-${refreshSeq}`}
-                        className="vs-media"
-                        src={mediaUrl}
-                        autoPlay
-                        playsInline
-                        preload="auto"
-                        muted={forceMuted || !(soundEnabled && audioUnlocked)}
-                        controls={false}
-                        loop={items.length === 1}
-                        onEnded={items.length === 1 ? undefined : advance}
-                        onError={advance}
-                      />
-
-                      {!audioUnlocked && needsAudioClick && (
-                        <button
-                          type="button"
-                          className="vs-soundCta"
-                          onClick={async () => {
-                            setNeedsAudioClick(false);
-                            setForceMuted(false);
-                            setAudioUnlocked(true);
-                            try {
-                              localStorage.setItem("ns2:vs-audio-unlocked", "1");
-                            } catch {}
-
-                            const v = videoRef.current;
-                            if (v) {
-                              v.muted = false;
-                              try {
-                                await v.play();
-                              } catch {
-                                setNeedsAudioClick(true);
-                              }
-                            }
-                          }}
-                        >
-                          Enable sound
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <img
-                      key={`${currentItem?.id ?? "img"}-${refreshSeq}`}
-                      className="vs-media"
-                      src={mediaUrl}
-                      alt=""
-                      draggable={false}
-                      onError={advance}
-                    />
-                  )}
-                </>
-              )}
+          {isPlaying ? (
+            <div ref={playerRef} className="vs-player" style={playerCommonStyle}>
+              <div className="vs-contentFrame" style={frameCommonStyle}>
+                <div className="vs-contentStage" style={stageStyle}>
+                  {renderPlayback()}
+                </div>
+              </div>
             </div>
           ) : (
             <>
@@ -1309,16 +1397,15 @@ useEffect(() => {
                     <span>{emptyPlaylistMsg}</span>
                   ) : vsState?.state === "WAITING" ? (
                     <span>Waiting for content assignment…</span>
-                  ) : vsState?.state === "PAIR" ? (
+                  ) : (
                     <span>Waiting for pairing…</span>
-                  ) : null}
+                  )}
                 </div>
               </div>
 
               <div className="vs-tv-right">
                 <div className="vs-qrWrap">
                   <div className="vs-qrBox">{qrValue ? <QRCodeSVG value={qrValue} size={220} /> : <div className="vs-qrFallback" />}</div>
-
                   <div className="vs-qrHint">
                     Or scan this QR code to open this screen
                     <br />

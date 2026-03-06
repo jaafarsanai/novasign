@@ -1,5 +1,6 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
+import { brand } from "../config/brand";
 import "./Sidebar.css";
 
 type Item = {
@@ -99,10 +100,7 @@ const items: Item[] = [
             stroke="currentColor"
             strokeWidth="2"
           />
-          <path
-            d="M9 10l6 4-6 4v-8Z"
-            fill="currentColor"
-          />
+          <path d="M9 10l6 4-6 4v-8Z" fill="currentColor" />
         </svg>
       </Icon>
     ),
@@ -218,10 +216,16 @@ export default function Sidebar() {
   return (
     <aside className="sb">
       <div className="sb-brand">
-        <div className="sb-brand-badge">N</div>
+        <div className="sb-brand-badge">
+          <img
+            src={brand.logoIcon}
+            alt={brand.appName}
+            style={{ width: 22, height: 22, objectFit: "contain" }}
+          />
+        </div>
         <div className="sb-brand-text">
-          <div className="sb-brand-name">Novasign</div>
-          <div className="sb-brand-space">Space Default</div>
+          <div className="sb-brand-name">{brand.appName}</div>
+          <div className="sb-brand-space">{brand.workspaceName}</div>
         </div>
       </div>
 
@@ -242,14 +246,13 @@ export default function Sidebar() {
         <button className="sb-support">Support</button>
 
         <div className="sb-user">
-          <div className="sb-user-avatar">J</div>
+          <div className="sb-user-avatar">{brand.initials}</div>
           <div className="sb-user-meta">
-            <div className="sb-user-name">jaafer</div>
-            <div className="sb-user-email">admin@technoserve.net</div>
+            <div className="sb-user-name">{brand.demoUserName.toLowerCase()}</div>
+            <div className="sb-user-email">{brand.demoUserEmail}</div>
           </div>
         </div>
       </div>
     </aside>
   );
 }
-

@@ -8,28 +8,29 @@ import {
   Settings,
   HelpCircle,
   Home,
-  FolderKanban,
-  Film,
   LayoutList,
 } from "lucide-react";
-
+import { brand } from "../config/brand";
 import "./AdminSidebar.css";
 
 export default function AdminSidebar() {
   return (
     <aside className="sidebar">
-      {/* Logo Section */}
       <div className="sidebar-header">
-        <div className="sidebar-logo">N</div>
+        <div className="sidebar-logo">
+          <img
+            src={brand.logoIcon}
+            alt={brand.appName}
+            style={{ width: 20, height: 20, objectFit: "contain" }}
+          />
+        </div>
         <div>
-          <div className="sidebar-title">Novasign</div>
-          <div className="sidebar-subtitle">Default workspace</div>
+          <div className="sidebar-title">{brand.appName}</div>
+          <div className="sidebar-subtitle">{brand.workspaceName}</div>
         </div>
       </div>
 
-      {/* Navigation */}
       <nav className="sidebar-nav">
-
         <div className="sidebar-section">Dashboard</div>
         <NavItem to="/welcome" icon={<Home size={18} />} label="Welcome" />
 
@@ -44,7 +45,6 @@ export default function AdminSidebar() {
 
         <div className="sidebar-section">Management</div>
         <NavItem to="/settings" icon={<Settings size={18} />} label="Settings" />
-
       </nav>
 
       <div className="sidebar-footer">
@@ -54,10 +54,10 @@ export default function AdminSidebar() {
         </button>
 
         <div className="sidebar-user">
-          <div className="sidebar-avatar">J</div>
+          <div className="sidebar-avatar">{brand.initials}</div>
           <div>
-            <div className="sidebar-user-name">Jaafar</div>
-            <div className="sidebar-user-email">admin@technoserve.net</div>
+            <div className="sidebar-user-name">{brand.demoUserName}</div>
+            <div className="sidebar-user-email">{brand.demoUserEmail}</div>
           </div>
         </div>
       </div>
@@ -77,13 +77,10 @@ function NavItem({
   return (
     <NavLink
       to={to}
-      className={({ isActive }) =>
-        isActive ? "nav-item active" : "nav-item"
-      }
+      className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
     >
       {icon}
       <span>{label}</span>
     </NavLink>
   );
 }
-

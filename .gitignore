@@ -7,7 +7,13 @@ coverage
 .env
 .env.*
 *.log
+*.tsbuildinfo
 
 # Local dumps
 TIMS_offline*
 TIMS_offline/
+
+# backup / junk
+*.bak
+*.BAK*
+*New Text Document*

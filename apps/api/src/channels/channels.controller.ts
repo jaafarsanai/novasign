@@ -19,15 +19,23 @@ type Orientation = "landscape" | "portrait";
 export class ChannelsController {
   constructor(private readonly prisma: PrismaService) {}
 
-  @Get()
-  async list(@Query("search") search?: string) {
-    const s = (search || "").trim();
-    const items = await this.prisma.channel.findMany({
-      where: s ? { name: { contains: s, mode: "insensitive" } } : undefined,
-      orderBy: { createdAt: "desc" },
-    });
-    return { items };
-  }
+@Get()
+async list(@Query("search") search?: string) {
+  const s = (search || "").trim();
+  const items = await this.prisma.channel.findMany({
+    where: s ? { name: { contains: s, mode: "insensitive" } } : undefined,
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      name: true,
+      orientation: true,
+      layoutId: true,
+      updatedAt: true,
+      createdAt: true,
+    },
+  });
+  return { items };
+}
 
   @Get(":id")
   async getById(@Param("id") id: string) {

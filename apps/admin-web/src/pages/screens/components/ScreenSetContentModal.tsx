@@ -20,6 +20,7 @@ export type ScreenChannelItem = {
   name: string;
   layoutId?: string;
   updatedAt?: string;
+  orientation?: "landscape" | "portrait";
 };
 
 export type ScreenPlaylistItem = {
@@ -46,10 +47,19 @@ export type ScreenPickerResult =
 
 type TabKey = "channels" | "playlists" | "media";
 
+type ScreenOrientation4 =
+  | "LANDSCAPE"
+  | "LANDSCAPE_FLIPPED"
+  | "PORTRAIT"
+  | "PORTRAIT_FLIPPED";
+
 type Props = {
   open: boolean;
   onClose: () => void;
   onConfirm: (picked: ScreenPickerResult) => void;
+
+  /** Used to filter channels only (playlists/media are not filtered) */
+  screenOrientation?: ScreenOrientation4;
 };
 
 /* ---------------- Helpers ---------------- */
@@ -74,9 +84,25 @@ function normalizeList(r: any): any[] {
             : [];
 }
 
+function screenBaseOrientation(o?: ScreenOrientation4): "landscape" | "portrait" {
+  const s = String(o ?? "LANDSCAPE").toUpperCase();
+  return s.startsWith("PORTRAIT") ? "portrait" : "landscape";
+}
+
+function normalizeChannelOrientation(raw: any): "landscape" | "portrait" | null {
+  const s = String(raw ?? "").toLowerCase().trim();
+  if (s === "landscape" || s === "portrait") return s;
+  return null;
+}
+
 /* ---------------- Component ---------------- */
 
-export default function ScreenSetContentModal({ open, onClose, onConfirm }: Props) {
+export default function ScreenSetContentModal({
+  open,
+  onClose,
+  onConfirm,
+  screenOrientation,
+}: Props) {
   const [tab, setTab] = useState<TabKey>("channels");
   const [q, setQ] = useState("");
 
@@ -136,42 +162,39 @@ export default function ScreenSetContentModal({ open, onClose, onConfirm }: Prop
     onClose();
   }
 
-  // -------- media loaders (match backend: /api/media?folderId=root&includeFolders=true) --------
+  // -------- media loader --------
 
-async function loadMediaFolder(folderId: string) {
-  setLoading(true);
-  try {
-    const params = new URLSearchParams();
-    params.set("folderId", folderId || ROOT_FOLDER_ID);
-    params.set("includeFolders", "true");
-    if (q?.trim()) params.set("search", q.trim());
+  async function loadMediaFolder(folderId: string) {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("folderId", folderId || ROOT_FOLDER_ID);
+      params.set("includeFolders", "true");
+      if (q?.trim()) params.set("search", q.trim());
 
-    const data: any = await fetchJson(`/api/media?${params.toString()}`);
+      const data: any = await fetchJson(`/api/media?${params.toString()}`);
 
-    // handle both shapes
-    const itemsArr = Array.isArray(data.items)
-      ? data.items
-      : Array.isArray(data.items?.items)
-        ? data.items.items
-        : [];
+      const itemsArr = Array.isArray(data.items)
+        ? data.items
+        : Array.isArray(data.items?.items)
+          ? data.items.items
+          : [];
 
-    const foldersArr = Array.isArray(data.folders)
-      ? data.folders
-      : Array.isArray(data.items?.folders)
-        ? data.items.folders
-        : [];
+      const foldersArr = Array.isArray(data.folders)
+        ? data.folders
+        : Array.isArray(data.items?.folders)
+          ? data.items.folders
+          : [];
 
-    setMedia(itemsArr);
-    setFolders(foldersArr);
-  } catch {
-    setMedia([]);
-    setFolders([]);
-  } finally {
-    setLoading(false);
+      setMedia(itemsArr);
+      setFolders(foldersArr);
+    } catch {
+      setMedia([]);
+      setFolders([]);
+    } finally {
+      setLoading(false);
+    }
   }
-}
-
-
 
   function goIntoFolder(f: ScreenFolderItem) {
     setFolderStack((prev) => [...prev, { id: f.id, name: f.name }]);
@@ -204,6 +227,7 @@ async function loadMediaFolder(folderId: string) {
               name: c.name ?? c.title ?? "Untitled channel",
               layoutId: c.layoutId,
               updatedAt: c.updatedAt ?? c.updated_at,
+              orientation: normalizeChannelOrientation(c.orientation) ?? undefined,
             }))
           );
         } else if (tab === "playlists") {
@@ -217,7 +241,6 @@ async function loadMediaFolder(folderId: string) {
             }))
           );
         } else if (tab === "media") {
-          // reset to root every time we enter Media tab
           setFolderStack([{ id: ROOT_FOLDER_ID, name: "All" }]);
         }
       } catch {
@@ -241,13 +264,20 @@ async function loadMediaFolder(folderId: string) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tab, currentFolderId, q]);
 
-  // -------- filters (kept; search is also server-side) --------
+  // -------- filters --------
+
+  const baseScreenOri = screenBaseOrientation(screenOrientation);
 
   const filteredChannels = useMemo(() => {
     const qq = q.trim().toLowerCase();
-    if (!qq) return channels;
-    return channels.filter((c) => (c.name || "").toLowerCase().includes(qq));
-  }, [channels, q]);
+    let list = !qq ? channels : channels.filter((c) => (c.name || "").toLowerCase().includes(qq));
+
+    // Keep channels with missing orientation (older API) to avoid hiding everything,
+    // but filter when the field exists.
+    list = list.filter((c) => !c.orientation || c.orientation === baseScreenOri);
+
+    return list;
+  }, [channels, q, baseScreenOri]);
 
   const filteredPlaylists = useMemo(() => {
     const qq = q.trim().toLowerCase();
@@ -268,6 +298,11 @@ async function loadMediaFolder(folderId: string) {
   }, [media, q]);
 
   if (!open) return null;
+
+  const channelsEmptyMsg =
+    channels.length === 0
+      ? "No channels found."
+      : `No channels found for this screen orientation (${baseScreenOri}).`;
 
   return (
     <div className="scp-backdrop" onMouseDown={onClose}>
@@ -440,7 +475,7 @@ async function loadMediaFolder(folderId: string) {
                 {loading && <div className="scp-empty">Loading…</div>}
 
                 {!loading && tab === "channels" && filteredChannels.length === 0 && (
-                  <div className="scp-empty">No channels found.</div>
+                  <div className="scp-empty">{channelsEmptyMsg}</div>
                 )}
 
                 {!loading && tab === "playlists" && filteredPlaylists.length === 0 && (
@@ -466,6 +501,7 @@ async function loadMediaFolder(folderId: string) {
                             <div className="scp-name">{c.name}</div>
                             <div className="scp-meta">
                               {c.layoutId ? `Layout: ${c.layoutId}` : "Channel"}
+                              {c.orientation ? ` • ${c.orientation}` : ""}
                             </div>
                           </div>
                         </div>
@@ -512,7 +548,7 @@ async function loadMediaFolder(folderId: string) {
               <span className="scp-selected">
                 {picked ? (
                   <>
-                    Selected: <b>{picked.item?.name ?? "item"}</b>
+                    Selected: <b>{(picked.item as any)?.name ?? "item"}</b>
                   </>
                 ) : (
                   <>

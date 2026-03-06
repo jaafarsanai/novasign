@@ -98,8 +98,9 @@
 }
 
 .psm-btn-primary {
-  background: #facc15;
-  border-color: #facc15;
+  
   color: #111827;
+  background: var(--brand-primary);
+border-color: var(--brand-primary);
 }
 

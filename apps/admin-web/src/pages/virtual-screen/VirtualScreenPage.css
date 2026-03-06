@@ -59,17 +59,16 @@ body,
 
 /* Media Mode */
 .vs-tv.vs-tv--media {
-  position: relative;
   display: block;
   padding: 0;
   gap: 0;
   background: #000;
 }
 
+/* make the player take the full TV frame */
 .vs-player {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
   overflow: hidden;
   background: #000;
 }
@@ -82,7 +81,10 @@ body,
   display: block;
   border-radius: 0 !important;
 }
-
+.vs-media--contain {
+  object-fit: contain !important;
+  background: #000;
+}
 .vs-videoWrap {
   position: absolute;
   inset: 0;
@@ -234,14 +236,12 @@ body,
 /* ================= Channel Layout / Zones ================= */
 
 .vs-zoneStage {
-  position: relative;
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 0;
 }
 
 .vs-zone {
   position: absolute;
-  overflow: hidden;
   background: #000;
 }
 
@@ -296,4 +296,113 @@ body,
 }
 .vs-zone.vs-swap[data-active="b"] .layer-a {
   opacity: 1;
+}
+/* ================= Content rotation (inside TV only) ================= */
+
+.vs-rotator {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vs-rotator-inner {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  transform: rotate(var(--vs-rot-deg, 0deg)) scale(var(--vs-rot-scale, 1));
+  transform-origin: center;
+}
+/* Center a content canvas inside the fixed TV frame (letterbox) */
+.vs-contentFrame {
+  position: absolute;
+  inset: 0;
+  
+  overflow: hidden;
+}
+
+.vs-contentBox {
+  position: relative;
+  overflow: hidden;
+  background: #000;
+}
+/* Content is rotated/scaled inside the fixed TV frame */
+
+.vs-contentStage {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform-origin: 50% 50%;
+}
+
+/* ========= EMBED (device fullscreen) ========= */
+
+.vs-root.vs-embed {
+  position: fixed;
+  inset: 0;
+  background: #000;
+  overflow: hidden;
+}
+
+.vs-player--embed {
+  position: fixed;
+  inset: 0;
+  background: #000;
+}
+
+.vs-embedOverlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  gap: 18px;
+  text-align: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.82);
+}
+
+.vs-embedTitle {
+  font-size: 34px;
+  font-weight: 800;
+  color: #fff;
+}
+
+.vs-embedCode {
+  font-size: 110px;
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  color: #fff;
+}
+
+.vs-embedHint {
+  color: rgba(255, 255, 255, 0.7);
+  font-size: 16px;
+}
+
+.vs-embedStatus {
+  color: rgba(255, 255, 255, 0.82);
+  font-size: 14px;
+}
+
+.vs-embedErr {
+  color: #ffb4b4;
+}
+/* ================= EMBED: no cropping inside zones ================= */
+.vs-root.vs-embed .vs-media,
+.vs-root.vs-embed .vs-zone .vs-media,
+.vs-root.vs-embed video.vs-media,
+.vs-root.vs-embed img.vs-media {
+  object-fit: fill !important; /* ✅ show whole media, no crop */
+  background: transparent;
+}
+/* Force media to stretch to container (no borders, no crop) */
+.vs-fit-fill {
+  object-fit: fill !important;
+}
+
+/* Force stretching inside zones / fullscreen (no black bars, no crop) */
+.vs-media--stretch {
+  object-fit: fill !important;
+  object-position: center !important;
 }

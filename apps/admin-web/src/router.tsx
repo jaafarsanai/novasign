@@ -1,3 +1,4 @@
+// apps/admin-web/src/router.tsx
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 
@@ -9,6 +10,9 @@ import ScreenPreviewPage from "./pages/screens/ScreenPreviewPage";
 
 // Virtual Screen
 import VirtualScreenPage from "./pages/virtual-screen"; // folder index.tsx
+
+// ✅ Device player
+import PlayerPage from "./pages/screens/PlayerPage";
 
 // Playlists
 import PlaylistsPage from "./pages/playlists/PlaylistsPage";
@@ -25,9 +29,12 @@ import ChannelEditorPage from "./pages/channels/ChannelEditorPage";
 export default function Router() {
   return (
     <Routes>
-      {/* PUBLIC (virtual screen) - must NOT be inside AppLayout */}
+      {/* ✅ PUBLIC (no AppLayout) */}
       <Route path="/virtual-screen" element={<VirtualScreenPage />} />
       <Route path="/virtual-screen/:id" element={<VirtualScreenPage />} />
+
+      {/* ✅ PUBLIC DEVICE PLAYER (no AppLayout) */}
+      <Route path="/player/:code" element={<PlayerPage />} />
 
       {/* ADMIN (layout) */}
       <Route path="/" element={<AppLayout />}>
@@ -36,20 +43,16 @@ export default function Router() {
         <Route path="screens" element={<ScreensPage />} />
 
         <Route path="playlists" element={<PlaylistsPage />} />
-        <Route path="playlists/new" element={<PlaylistEditorPage/>} />
+        <Route path="playlists/new" element={<PlaylistEditorPage />} />
         <Route path="playlists/:id" element={<PlaylistDetailPage />} />
         <Route path="playlists/:id/edit" element={<PlaylistEditorPage />} />
 
-        <Route path="/media" element={<MediaPage />} />
-        <Route path="/channels" element={<ChannelsPage />} />
-        <Route path="/channels/:id" element={<ChannelEditorPage />} />
-
-        {/* Add other admin routes here */}
+        <Route path="media" element={<MediaPage />} />
+        <Route path="channels" element={<ChannelsPage />} />
+        <Route path="channels/:id" element={<ChannelEditorPage />} />
       </Route>
 
-      {/* fallback */}
       <Route path="*" element={<Navigate to="/screens" replace />} />
     </Routes>
   );
 }
-

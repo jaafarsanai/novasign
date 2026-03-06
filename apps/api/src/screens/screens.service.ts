@@ -1,6 +1,6 @@
 // apps/api/src/screens/screens.service.ts
 
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { randomUUID } from "node:crypto";
 
@@ -27,6 +27,7 @@ type AdminScreenRow = {
   assignedContentName: string | null;
 
   virtualSessionId: string | null;
+    orientation: any; // ScreenOrientation
 };
 
 type VSState = "PAIR" | "WAITING" | "PLAYING" | "UNKNOWN";
@@ -40,6 +41,7 @@ export type VsStatePayload = {
   exists: boolean;
   screenId: string | null;
   isVirtual: boolean;
+    orientation: any; // ScreenOrientation
 };
 
 export type VsPlaylistItem = {
@@ -59,10 +61,16 @@ export type VsPlaylistPayload = {
   channel?: {
     channelId: string;
     layoutId: string | null;
+    orientation?: "landscape" | "portrait";
     zones: Record<string, VsPlaylistItem[]>;
     transition?: any; // Channel.transition (JSON)
   };
 };
+
+function screenBaseOrientation(o: any): "landscape" | "portrait" {
+  const s = String(o ?? "LANDSCAPE").toUpperCase();
+  return s.startsWith("PORTRAIT") ? "portrait" : "landscape";
+}
 
 function normalizeMediaType(raw: unknown): "image" | "video" {
   const t = String(raw ?? "").toLowerCase();
@@ -330,6 +338,57 @@ export class ScreensService {
     return id;
   }
 
+async updateScreenById(
+  id: string,
+  dto: { name?: string; orientation?: "LANDSCAPE" | "LANDSCAPE_FLIPPED" | "PORTRAIT" | "PORTRAIT_FLIPPED" }
+) {
+  const existing = await this.prisma.screen.findUnique({
+    where: { id },
+    select: {
+      id: true,
+      assignedPlaylistId: true,
+      assignedContentType: true,
+      assignedContentId: true,
+      orientation: true,
+    },
+  });
+  if (!existing) throw new NotFoundException("Screen not found");
+
+  // If changing orientation and current assignment is a channel, enforce compatibility
+  if (dto.orientation) {
+    const effectiveType =
+      (existing.assignedContentType as any) ?? (existing.assignedPlaylistId ? "PLAYLIST" : null);
+    const effectiveId =
+      (existing.assignedContentId as any) ?? (existing.assignedPlaylistId ?? null);
+
+    if (effectiveType === "CHANNEL" && effectiveId) {
+      const ch = await this.prisma.channel.findUnique({
+        where: { id: String(effectiveId) as any },
+        select: { orientation: true },
+      });
+      if (ch) {
+        const so = screenBaseOrientation(dto.orientation);
+        const co = String(ch.orientation ?? "landscape");
+        if (so !== co) {
+          throw new BadRequestException(
+            `Channel orientation (${co}) does not match screen orientation (${so}).`
+          );
+        }
+      }
+    }
+  }
+
+  const data: any = {};
+  if (dto.name != null) data.name = String(dto.name);
+  if (dto.orientation != null) data.orientation = dto.orientation;
+
+  try {
+    return await this.prisma.screen.update({ where: { id }, data });
+  } catch (e: any) {
+    if (e?.code === "P2025") throw new NotFoundException("Screen not found");
+    throw e;
+  }
+}
   async getByPairingCodeOrNull(pairingCode: string) {
     const code = this.normCode(pairingCode);
     if (!code) return null;
@@ -427,42 +486,87 @@ export class ScreensService {
           assignedContentName,
 
           virtualSessionId,
+          orientation: (s as any).orientation ?? "LANDSCAPE",
         };
       })
     );
   }
 
-  async pairByCodeUpsert(rawCode: string) {
-    const pairingCode = this.normCode(rawCode);
-    if (!pairingCode || pairingCode.length !== 6) {
-      throw new NotFoundException("Invalid pairing code");
+// inside ScreensService class
+async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
+  const pairingCode = this.normCode(rawCode);
+  if (!pairingCode || pairingCode.length !== 6) {
+    throw new NotFoundException("Invalid pairing code");
+  }
+
+  const shouldBeVirtual =
+    this.hasVirtualSessionForCode(pairingCode) || this.isVirtualActive(pairingCode);
+
+  // ✅ If deviceId provided -> bind to that device row
+  if (deviceId && String(deviceId).trim()) {
+    const id = String(deviceId).trim();
+
+    const existingByCode = await this.prisma.screen.findFirst({ where: { pairingCode } });
+    if (existingByCode && existingByCode.id !== id) {
+      throw new BadRequestException("Pairing code is already used by another screen.");
     }
 
-    const existing = await this.prisma.screen.findFirst({ where: { pairingCode } });
+    const existingById = await this.prisma.screen.findUnique({ where: { id } }).catch(() => null);
 
-    const shouldBeVirtual = this.hasVirtualSessionForCode(pairingCode) || this.isVirtualActive(pairingCode);
-
-    if (!existing) {
+    if (!existingById) {
       return this.prisma.screen.create({
         data: {
-          name: null,
+          id,
+          name: name?.trim() || "Android Player",
           pairingCode,
           pairedAt: new Date(),
           lastSeenAt: null,
           assignedPlaylistId: null,
-          isVirtual: shouldBeVirtual,
+          assignedContentType: null,
+          assignedContentId: null,
+          isVirtual: false, // ✅ device
         },
       });
     }
 
     return this.prisma.screen.update({
-      where: { id: existing.id },
+      where: { id },
       data: {
+        name: name?.trim() || existingById.name,
+        pairingCode,
         pairedAt: new Date(),
-        ...(shouldBeVirtual ? { isVirtual: true } : {}),
+        isVirtual: false, // ✅ force device
       },
     });
   }
+
+  // ✅ Code-only pairing (admin enters code)
+  const existing = await this.prisma.screen.findFirst({ where: { pairingCode } });
+
+  if (!existing) {
+    return this.prisma.screen.create({
+      data: {
+        name: null,
+        pairingCode,
+        pairedAt: new Date(),
+        lastSeenAt: null,
+        assignedPlaylistId: null,
+        assignedContentType: null,
+        assignedContentId: null,
+        isVirtual: shouldBeVirtual,
+      },
+    });
+  }
+
+  // ✅ IMPORTANT FIX: force isVirtual to the computed truth (can become false)
+  return this.prisma.screen.update({
+    where: { id: existing.id },
+    data: {
+      pairedAt: new Date(),
+      isVirtual: shouldBeVirtual,
+    },
+  });
+}
 
   private async resolveAssignedContentName(type: string | null, id: string | null) {
     if (!type || !id) return null;
@@ -542,6 +646,7 @@ export class ScreensService {
       assignedContentName,
 
       virtualSessionId,
+      orientation: (s as any).orientation ?? "LANDSCAPE",
     };
   }
 
@@ -559,9 +664,26 @@ export class ScreensService {
       const m = await this.prisma.media.findUnique({ where: { id: contentId }, select: { id: true } });
       if (!m) throw new NotFoundException("Media not found");
     } else if (type === "CHANNEL") {
-      const ch = await this.prisma.channel.findUnique({ where: { id: contentId }, select: { id: true } });
-      if (!ch) throw new NotFoundException("Channel not found");
-    }
+  const screen = await this.prisma.screen.findUnique({
+    where: { id: screenId },
+    select: { orientation: true },
+  });
+  if (!screen) throw new NotFoundException("Screen not found");
+
+  const ch = await this.prisma.channel.findUnique({
+    where: { id: contentId },
+    select: { id: true, orientation: true },
+  });
+  if (!ch) throw new NotFoundException("Channel not found");
+
+  const so = screenBaseOrientation(screen.orientation);
+  const co = String(ch.orientation ?? "landscape"); // prisma enum: landscape|portrait
+  if (so !== co) {
+    throw new BadRequestException(
+      `Channel orientation (${co}) does not match screen orientation (${so}).`
+    );
+  }
+}
 
     const nextAssignedPlaylistId = type === "PLAYLIST" ? contentId : null;
 
@@ -616,6 +738,7 @@ export class ScreensService {
         exists: false,
         screenId: null,
         isVirtual: false,
+        orientation: "LANDSCAPE",
       };
     }
 
@@ -628,6 +751,7 @@ export class ScreensService {
         assignedContentType: true,
         assignedContentId: true,
         isVirtual: true,
+        orientation: true,
       },
     });
 
@@ -640,6 +764,7 @@ export class ScreensService {
         exists: false,
         screenId: null,
         isVirtual: false,
+        orientation: "LANDSCAPE",
       };
     }
 
@@ -656,6 +781,7 @@ export class ScreensService {
         exists: true,
         screenId: s.id,
         isVirtual: !!s.isVirtual,
+        orientation: (s as any).orientation ?? "LANDSCAPE",
       };
     }
 
@@ -667,6 +793,7 @@ export class ScreensService {
       exists: true,
       screenId: s.id,
       isVirtual: !!s.isVirtual,
+      orientation: (s as any).orientation ?? "LANDSCAPE",
     };
   }
 
@@ -734,7 +861,7 @@ export class ScreensService {
       const ch = await this.prisma.channel
         .findUnique({
           where: { id: channelId },
-          select: { id: true, zones: true, layoutId: true, transition: true, updatedAt: true },
+          select: { id: true, zones: true, layoutId: true, transition: true, updatedAt: true, orientation: true },
         })
         .catch(() => null);
 
@@ -902,6 +1029,7 @@ export class ScreensService {
           layoutId: (ch.layoutId as any) ?? null,
           zones,
           transition: (ch.transition as any) ?? null, // ✅ includes UI transition config
+          orientation: ch.orientation ?? "landscape",
         },
       };
     }

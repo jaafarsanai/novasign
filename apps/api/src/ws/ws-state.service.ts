@@ -9,6 +9,7 @@ export type VsStatePayload = {
   state: VSState;
   updatedAt: number;
   playlistAssigned: boolean;
+  orientation?: any;
 };
 
 export type VsPlaylistItem = {
@@ -98,17 +99,19 @@ export class WsStateService {
     const code = this.normCode(rawCode);
     if (!code) {
       client.emit("vs:state", {
-        code: "",
-        state: "PAIR",
-        updatedAt: Date.now(),
-        playlistAssigned: false,
-      } satisfies VsStatePayload);
-      client.emit("vs:playlist", {
-        code: "",
-        playlistId: null,
-        updatedAt: Date.now(),
-        items: [],
-      } satisfies VsPlaylistPayload);
+  code: "",
+  state: "PAIR",
+  updatedAt: Date.now(),
+  playlistAssigned: false,
+  orientation: "LANDSCAPE",
+} satisfies VsStatePayload);
+
+client.emit("vs:playlist", {
+  code: "",
+  playlistId: null,
+  updatedAt: Date.now(),
+  items: [],
+} satisfies VsPlaylistPayload);
       return;
     }
 

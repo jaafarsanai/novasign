@@ -29,17 +29,32 @@ async list(
 ) {
   const include = String(includeFolders ?? "").toLowerCase() === "true";
 
-  const items = await this.media.list({
+  const rawItems: any = await this.media.list({
     search,
     type,
     folderId: folderId ? String(folderId) : undefined,
   });
 
+  // ✅ normalize to array
+  const items: any[] =
+    Array.isArray(rawItems) ? rawItems :
+    Array.isArray(rawItems?.items) ? rawItems.items :
+    Array.isArray(rawItems?.items?.items) ? rawItems.items.items :
+    Array.isArray(rawItems?.data) ? rawItems.data :
+    [];
+
   if (!include) return { items };
 
-  const folders = await this.media.listFolders({
+  const rawFolders: any = await this.media.listFolders({
     parentId: folderId ? String(folderId) : "root",
   });
+
+  // ✅ normalize to array
+  const folders: any[] =
+    Array.isArray(rawFolders) ? rawFolders :
+    Array.isArray(rawFolders?.items) ? rawFolders.items :
+    Array.isArray(rawFolders?.folders) ? rawFolders.folders :
+    [];
 
   return { items, folders };
 }
