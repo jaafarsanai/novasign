@@ -30,7 +30,7 @@ export type BrandConfig = {
   };
 };
 
-const envBrand = ((import.meta.env.VITE_BRAND as BrandKey | undefined) || "novasign").toLowerCase() as BrandKey;
+const envBrand = ((import.meta.env.VITE_BRAND as BrandKey | undefined) || "pulsepanels").toLowerCase() as BrandKey;
 
 const brands: Record<BrandKey, BrandConfig> = {
   novasign: {
@@ -78,20 +78,20 @@ const brands: Record<BrandKey, BrandConfig> = {
     loginDemoEmail: "admin@pulsepanels.com",
     loginDemoPassword: "pulsepanels123",
     colors: {
-    primary: "#1DA1F2",
-    primaryDark: "#1689CF",
-    secondary: "#0A2342",
-    sidebarBg: "#071426",
-    sidebarText: "#EAF4FF",
-    sidebarMuted: "#9AB3C9",
-    sidebarActiveBg: "#1DA1F2",
-    sidebarActiveText: "#FFFFFF",
-    pageBg: "#F4F7FB",
-    cardBg: "#FFFFFF",
-    textMain: "#0A2342",
-    textSub: "#5F7288",
-  },
+      primary: "#1DA1F2",
+      primaryDark: "#1689CF",
+      secondary: "#0A2342",
+      sidebarBg: "#071426",
+      sidebarText: "#EAF4FF",
+      sidebarMuted: "#9AB3C9",
+      sidebarActiveBg: "#1DA1F2",
+      sidebarActiveText: "#FFFFFF",
+      pageBg: "#F4F7FB",
+      cardBg: "#FFFFFF",
+      textMain: "#0A2342",
+      textSub: "#5F7288",
+    },
   },
 };
 
-export const brand = brands[envBrand] || brands.novasign;
+export const brand = brands[envBrand] || brands.pulsepanels;
