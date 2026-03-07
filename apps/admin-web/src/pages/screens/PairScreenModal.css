@@ -1,18 +1,20 @@
 .pairModalOverlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.35);
+  background: rgba(7, 20, 38, 0.52);
+  backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 9999;
+  padding: 24px;
 }
 
 .pairModal {
   width: min(1080px, calc(100vw - 48px));
   background: #fff;
-  border-radius: 10px;
-  box-shadow: 0 20px 80px rgba(0, 0, 0, 0.25);
+  border-radius: 14px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
   overflow: hidden;
 }
 
@@ -20,14 +22,14 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px 18px;
-  border-bottom: 1px solid #eee;
+  padding: 18px 20px;
+  border-bottom: 1px solid rgba(10, 35, 66, 0.08);
 }
 
 .pairModalTitle {
   font-size: 22px;
-  font-weight: 700;
-  color: #111;
+  font-weight: 800;
+  color: var(--brand-text-main);
 }
 
 .pairModalClose {
@@ -38,7 +40,11 @@
   font-size: 28px;
   line-height: 1;
   cursor: pointer;
-  color: #111;
+  color: var(--brand-text-main);
+}
+
+.pairModalClose:hover {
+  opacity: 0.72;
 }
 
 .pairModalBody {
@@ -50,7 +56,7 @@
   margin: 0 auto;
   width: min(860px, 100%);
   aspect-ratio: 16 / 9;
-  border-radius: 6px;
+  border-radius: 8px;
   background: radial-gradient(120% 120% at 25% 35%, #2a2f36, #14171b 55%, #0c0e10);
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.25);
   border: 2px solid #0b0c0e;
@@ -65,13 +71,7 @@
   align-items: center;
 }
 
-.pairTvLogoMark {
-  width: 22px;
-  height: 14px;
-  border-radius: 4px;
-  background: #f6c400;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
-}
+
 
 .pairTvCenter {
   height: 100%;
@@ -102,36 +102,29 @@
   margin-left: 6px;
 }
 
-/* Big code, ScreenCloud-like */
-.pairTvCodeInput{
+.pairTvCodeInput {
   width: min(720px, 92%);
   background: transparent;
   border: 0;
   outline: none;
-
-  /* Bigger code like ScreenCloud */
   font-size: clamp(64px, 7vw, 110px);
   font-weight: 900;
   letter-spacing: 10px;
   text-transform: uppercase;
   text-align: center;
   color: #fff;
-
-  /* ✅ show blinking caret */
-  caret-color: rgba(255,255,255,.95);
+  caret-color: rgba(255, 255, 255, 0.95);
 }
 
-
-/* Make sure no pseudo caret/decoration appears */
 .pairTvCodeInput::selection {
-  background: rgba(246, 196, 0, 0.25);
+  background: rgba(29, 161, 242, 0.25);
 }
 
 .pairTvUnderline {
   margin: 18px auto 18px;
   width: min(600px, 92%);
   height: 2px;
-  background: #f6c400;
+  background: var(--brand-primary);
   opacity: 0.95;
 }
 
@@ -146,6 +139,7 @@
 
 .pairTvCheckbox input {
   transform: scale(1.05);
+  accent-color: var(--brand-primary);
 }
 
 .pairTvNote {
@@ -172,16 +166,51 @@
 .pairContinueBtn {
   min-width: 240px;
   height: 44px;
-  border: 0;
-  border-radius: 8px;
-  background: #f6c400;
-  color: #111;
+  border: 1px solid var(--brand-primary);
+  border-radius: 10px;
+  background: var(--brand-primary);
+  color: #fff;
   font-weight: 800;
   cursor: pointer;
+  box-shadow: 0 12px 28px rgba(29, 161, 242, 0.22);
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.08s ease;
+}
+
+.pairContinueBtn:hover:not(:disabled) {
+  background: var(--brand-primary-dark);
+  border-color: var(--brand-primary-dark);
+}
+
+.pairContinueBtn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .pairContinueBtn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
+@media (max-width: 768px) {
+  .pairModalOverlay {
+    padding: 14px;
+  }
+
+  .pairModal {
+    width: min(100%, calc(100vw - 20px));
+  }
+
+  .pairTvCodeInput {
+    font-size: clamp(40px, 10vw, 72px);
+    letter-spacing: 6px;
+  }
+
+  .pairContinueBtn {
+    min-width: 200px;
+    width: 100%;
+  }
+}
