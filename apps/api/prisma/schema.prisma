@@ -182,3 +182,16 @@ enum ScreenOrientation {
   PORTRAIT
   PORTRAIT_FLIPPED
 }
+
+model License {
+  id          String   @id @default(cuid())
+  tenantId    String?  @unique
+  licenseType String   // TRIAL | PAID
+  status      String   // ACTIVE | EXPIRED | SUSPENDED | CANCELLED
+  planCode    String?  // BASIC | PRO | ENTERPRISE
+  startsAt    DateTime
+  expiresAt   DateTime
+  trialDays   Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
