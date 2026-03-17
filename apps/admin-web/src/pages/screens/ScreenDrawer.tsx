@@ -1,12 +1,26 @@
 import React from "react";
 import "./ScreenDrawer.css";
-import { ScreenModel } from "./ScreenCard";
+
+type ScreenModel = {
+  id: string;
+  name: string;
+  type: "VIRTUAL" | "DEVICE";
+  status: "PENDING" | "PAIRED" | "OFFLINE" | "ARCHIVED";
+  lastSeenAt?: string | null;
+};
 
 interface ScreenDrawerProps {
   screen: ScreenModel | null;
   onClose: () => void;
   onRefresh?: () => void;
   onDelete?: (id: string) => void;
+}
+
+function formatLastSeen(value?: string | null) {
+  if (!value) return "—";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString();
 }
 
 const ScreenDrawer: React.FC<ScreenDrawerProps> = ({
@@ -44,10 +58,7 @@ const ScreenDrawer: React.FC<ScreenDrawerProps> = ({
             <strong>Type:</strong> {screen.type}
           </p>
           <p>
-            <strong>Last seen:</strong> {screen.lastSeen}
-          </p>
-          <p>
-            <strong>Location:</strong> {screen.location}
+            <strong>Last seen:</strong> {formatLastSeen(screen.lastSeenAt)}
           </p>
         </div>
 
@@ -77,4 +88,3 @@ const ScreenDrawer: React.FC<ScreenDrawerProps> = ({
 };
 
 export default ScreenDrawer;
-

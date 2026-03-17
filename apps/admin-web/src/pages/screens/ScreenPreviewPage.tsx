@@ -11,26 +11,20 @@ type PreviewItem = {
 };
 
 type ScreenSnapshot = {
-  screen: {
-    id: string;
-    name: string | null;
-    pairingCode: string;
-    pairedAt: string | null;
-    lastSeenAt: string | null;
-    assignedPlaylistId: string | null;
-    assignedPlaylistName: string | null;
-  };
-  playlist: {
-    id: string | null;
-    name: string | null;
-    items: PreviewItem[];
-  };
-  nowPlaying: {
-    itemId: string | null;
-    startedAt: number | null;
-    positionMs: number | null;
-  };
-  updatedAt: number;
+  id: string;
+  name: string | null;
+  runtimeKey: string;
+  pairedAt: string | null;
+  lastSeenAt: string | null;
+  assignedPlaylistId: string | null;
+  assignedPlaylistName: string | null;
+  assignedContentType: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
+  assignedContentId: string | null;
+  assignedContentName: string | null;
+  virtualSessionId: string | null;
+  activePairingCode: string | null;
+  orientation: string;
+  status: string;
 };
 
 function normalizeUrl(url: string): string {
@@ -46,15 +40,17 @@ export default function ScreenPreviewPage() {
 
   const [connected, setConnected] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
   const [snap, setSnap] = useState<ScreenSnapshot | null>(null);
-  const items = useMemo(() => snap?.playlist?.items ?? [], [snap]);
+  const [items, setItems] = useState<PreviewItem[]>([]);
 
   const [localIndex, setLocalIndex] = useState(0);
   const timerRef = useRef<number | null>(null);
   const socketRef = useRef<Socket | null>(null);
 
-  const active = items.length ? items[localIndex % items.length] : null;
+  const active = useMemo(
+    () => (items.length ? items[localIndex % items.length] : null),
+    [items, localIndex],
+  );
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -67,7 +63,6 @@ export default function ScreenPreviewPage() {
     setLocalIndex((prev) => (items.length ? (prev + 1) % items.length : 0));
   };
 
-  // Connect to /screens namespace
   useEffect(() => {
     if (!screenId) return;
 
@@ -94,7 +89,6 @@ export default function ScreenPreviewPage() {
 
     s.on("connect", () => {
       setConnected(true);
-      s.emit("screen:subscribe", { screenId });
     });
 
     s.on("disconnect", () => {
@@ -105,60 +99,16 @@ export default function ScreenPreviewPage() {
       setErr(e?.message ?? "Socket connect error");
     });
 
-    s.on("screen:snapshot", (payload: ScreenSnapshot) => {
+    s.on("screens:snapshot", (payload: ScreenSnapshot) => {
+      if (!payload || payload.id !== screenId) return;
       setSnap(payload);
-
-      // If server provided nowPlaying.itemId, align local index to it.
-      const itemId = payload?.nowPlaying?.itemId;
-      if (itemId && Array.isArray(payload.playlist?.items)) {
-        const idx = payload.playlist.items.findIndex((x) => x.id === itemId);
-        if (idx >= 0) setLocalIndex(idx);
-      }
     });
 
-    s.on("screen:playlist", (payload: { screenId: string; playlistId: string | null; items: PreviewItem[] }) => {
-      setSnap((prev) => {
-        if (!prev) return prev;
-        if (prev.screen.id !== payload.screenId) return prev;
-        const nextSnap: ScreenSnapshot = {
-          ...prev,
-          playlist: {
-            ...prev.playlist,
-            id: payload.playlistId,
-            items: Array.isArray(payload.items) ? payload.items.slice() : [],
-          },
-          updatedAt: Date.now(),
-        };
-        return nextSnap;
-      });
-
-      // keep index in range
-      setLocalIndex((prev) => {
-        const n = Array.isArray(payload.items) ? payload.items.length : 0;
-        if (n <= 0) return 0;
-        return prev < n ? prev : 0;
-      });
-    });
-
-    s.on("screen:nowPlaying", (payload: { screenId: string; itemId: string | null; startedAt?: number | null }) => {
-      setSnap((prev) => {
-        if (!prev) return prev;
-        if (prev.screen.id !== payload.screenId) return prev;
-        return {
-          ...prev,
-          nowPlaying: {
-            itemId: payload.itemId ?? null,
-            startedAt: typeof payload.startedAt === "number" ? payload.startedAt : prev.nowPlaying.startedAt,
-            positionMs: prev.nowPlaying.positionMs,
-          },
-          updatedAt: Date.now(),
-        };
-      });
-
-      // Align index to server-provided item
-      if (payload.itemId) {
-        const idx = items.findIndex((x) => x.id === payload.itemId);
-        if (idx >= 0) setLocalIndex(idx);
+    s.on("screens:deleted", (payload: { id: string }) => {
+      if (payload?.id === screenId) {
+        setErr("Screen deleted");
+        setSnap(null);
+        setItems([]);
       }
     });
 
@@ -169,10 +119,8 @@ export default function ScreenPreviewPage() {
       } catch {}
       socketRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [screenId]);
 
-  // local playback (fallback): even if nowPlaying is missing, you still see playback.
   useEffect(() => {
     clearTimer();
     if (!active) return;
@@ -181,8 +129,8 @@ export default function ScreenPreviewPage() {
       const ms = typeof active.durationMs === "number" && active.durationMs > 0 ? active.durationMs : 5000;
       timerRef.current = window.setTimeout(() => next(), ms);
     }
+
     return () => clearTimer();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active?.id]);
 
   return (
@@ -194,15 +142,21 @@ export default function ScreenPreviewPage() {
             Connected: <b>{connected ? "YES" : "NO"}</b>
           </div>
           <div style={{ opacity: 0.75, marginTop: 4 }}>
-            Screen: <b>{snap?.screen?.name ?? "—"}</b> • Code: <b>{snap?.screen?.pairingCode ?? "—"}</b>
+            Screen: <b>{snap?.name ?? "—"}</b> • Status: <b>{snap?.status ?? "—"}</b>
           </div>
           <div style={{ opacity: 0.75, marginTop: 4 }}>
-            Playlist: <b>{snap?.screen?.assignedPlaylistName ?? "—"}</b> • Items: <b>{items.length}</b>
+            Runtime Key: <b>{snap?.runtimeKey ?? "—"}</b>
+          </div>
+          <div style={{ opacity: 0.75, marginTop: 4 }}>
+            Active Pairing Code: <b>{snap?.activePairingCode ?? "—"}</b>
+          </div>
+          <div style={{ opacity: 0.75, marginTop: 4 }}>
+            Assigned Content: <b>{snap?.assignedContentName ?? "—"}</b>
           </div>
         </div>
 
         <div style={{ display: "flex", gap: 8 }}>
-          <button type="button" onClick={() => socketRef.current?.emit("screen:subscribe", { screenId })}>
+          <button type="button" onClick={() => window.location.reload()}>
             Refresh snapshot
           </button>
           <button type="button" onClick={() => next()} disabled={!items.length}>
@@ -230,7 +184,7 @@ export default function ScreenPreviewPage() {
         }}
       >
         {!active ? (
-          <div style={{ color: "white", opacity: 0.8 }}>No content</div>
+          <div style={{ color: "white", opacity: 0.8 }}>No content preview loaded</div>
         ) : active.type === "image" ? (
           <img
             src={normalizeUrl(active.url)}
@@ -250,11 +204,6 @@ export default function ScreenPreviewPage() {
           />
         )}
       </div>
-
-      <div style={{ marginTop: 10, opacity: 0.75 }}>
-        This preview will sync to <b>screen:nowPlaying</b> when available. Otherwise it plays the assigned playlist locally.
-      </div>
     </div>
   );
 }
-

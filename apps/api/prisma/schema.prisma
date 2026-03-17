@@ -1,5 +1,3 @@
-// prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,50 +8,465 @@ datasource db {
   shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
-model Screen {
-  id         String   @id @default(cuid())
-  name       String?
-  lastSeenAt DateTime?
+//////////////////////////////////////////////////////
+// ENUMS
+//////////////////////////////////////////////////////
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  pairingCode String @unique
-
-  // legacy playlist assignment (kept for compatibility)
-  assignedPlaylistId String?
-
-  // ✅ NEW: generic “content source” assignment
-  // expected values in code: "playlist" | "channel" | "media" (or your chosen convention)
-  assignedContentType String?
-  assignedContentId   String?
-
-  orientation ScreenOrientation @default(LANDSCAPE)
-  timezone    String           @default("UTC")
-
-  pairedAt  DateTime?
-  isVirtual Boolean @default(false)
-
-  assignedPlaylist Playlist? @relation(fields: [assignedPlaylistId], references: [id])
-
-  @@index([assignedPlaylistId])
-  @@index([assignedContentType])
-  @@index([assignedContentId])
-  @@index([isVirtual])
+enum ScreenOrientation {
+  LANDSCAPE
+  LANDSCAPE_FLIPPED
+  PORTRAIT
+  PORTRAIT_FLIPPED
 }
 
-model Playlist {
+enum ChannelOrientation {
+  landscape
+  portrait
+}
+
+enum OrganizationRole {
+  ORG_OWNER
+  ORG_ADMIN
+  ORG_AUDITOR
+  MEMBER
+}
+
+enum WorkspaceRole {
+  WORKSPACE_ADMIN
+  CONTENT_MANAGER
+  EDITOR
+  VIEWER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+}
+
+enum WorkspaceStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum LicenseStatus {
+  ACTIVE
+  EXPIRED
+  CANCELLED
+  TRIAL
+  SUSPENDED
+}
+
+enum MediaVisibilityScope {
+  GLOBAL
+  WORKSPACE
+}
+
+enum MediaOwnerType {
+  ORGANIZATION
+  WORKSPACE
+}
+
+enum AuditActorType {
+  USER
+  SYSTEM
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  LOGIN_FAILED
+
+  USER_INVITED
+  USER_INVITE_RESENT
+  USER_ACTIVATED
+  USER_DEACTIVATED
+  USER_UPDATED
+
+  ORGANIZATION_UPDATED
+
+  WORKSPACE_CREATED
+  WORKSPACE_UPDATED
+  WORKSPACE_ARCHIVED
+  WORKSPACE_MEMBER_ADDED
+  WORKSPACE_MEMBER_REMOVED
+  WORKSPACE_ROLE_CHANGED
+
+  SCREEN_CREATED
+  SCREEN_UPDATED
+  SCREEN_ARCHIVED
+  SCREEN_PAIRED
+  SCREEN_UNPAIRED
+  SCREEN_MOVED_WORKSPACE
+  SCREEN_ASSIGNED_CONTENT
+
+  PLAYLIST_CREATED
+  PLAYLIST_UPDATED
+  PLAYLIST_DELETED
+
+  CHANNEL_CREATED
+  CHANNEL_UPDATED
+  CHANNEL_DELETED
+
+  MEDIA_CREATED
+  MEDIA_UPDATED
+  MEDIA_DELETED
+  MEDIA_MOVED
+
+  FOLDER_CREATED
+  FOLDER_UPDATED
+  FOLDER_DELETED
+
+  LICENSE_CREATED
+  LICENSE_UPDATED
+}
+
+enum NotificationEventType {
+  SCREEN_OFFLINE
+  SCREEN_ONLINE
+  LICENSE_THRESHOLD
+}
+
+enum PairingSessionType {
+  VIRTUAL_SCREEN
+  DEVICE
+}
+
+enum PairingSessionStatus {
+  OPEN
+  CLAIMED
+  EXPIRED
+  CANCELLED
+}
+
+enum ScreenStatus {
+  PENDING
+  PAIRED
+  OFFLINE
+  ARCHIVED
+}
+
+//////////////////////////////////////////////////////
+// LEGACY MODEL (KEEP TEMPORARILY)
+//////////////////////////////////////////////////////
+
+model Tenant {
   id        String   @id @default(cuid())
   name      String
+  slug      String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  users    User[]
+  licenses License[]
+
+  @@map("Tenant")
+}
+
+//////////////////////////////////////////////////////
+// NEW CORE MODELS
+//////////////////////////////////////////////////////
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  isActive  Boolean  @default(true)
+  timezone  String   @default("UTC")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  workspaces             Workspace[]
+  memberships            OrganizationMembership[]
+  workspaceMemberships   WorkspaceMembership[]
+  licenses               License[]
+  screens                Screen[]
+  playlists              Playlist[]
+  mediaFolders           MediaFolder[]
+  media                  Media[]
+  channels               Channel[]
+  auditLogs              AuditLog[]
+  screenGroups           ScreenGroup[]
+  notificationRecipients NotificationRecipient[]
+  pairingSessions        PairingSession[]
+
+  @@index([isActive])
+}
+
+model Workspace {
+  id             String          @id @default(cuid())
+  organizationId String
+  name           String
+  slug           String
+  status         WorkspaceStatus @default(ACTIVE)
+  description    String?
+  timezone       String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  memberships            WorkspaceMembership[]
+  screens                Screen[]
+  playlists              Playlist[]
+  mediaFolders           MediaFolder[]
+  media                  Media[]
+  channels               Channel[]
+  screenGroups           ScreenGroup[]
+  notificationRecipients NotificationRecipient[]
+  auditLogs              AuditLog[]
+  defaultForUsers        User[]                  @relation("UserDefaultWorkspace")
+  pairingSessions        PairingSession[]
+
+  @@unique([organizationId, slug])
+  @@unique([organizationId, name])
+  @@index([organizationId])
+  @@index([status])
+}
+
+model OrganizationMembership {
+  id              String           @id @default(cuid())
+  organizationId  String
+  userId          String
+  role            OrganizationRole @default(MEMBER)
+  status          MembershipStatus @default(ACTIVE)
+  invitedByUserId String?
+  invitedAt       DateTime?
+  joinedAt        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([organizationId])
+  @@index([userId])
+  @@index([role])
+  @@index([status])
+}
+
+model WorkspaceMembership {
+  id              String           @id @default(cuid())
+  organizationId  String
+  workspaceId     String
+  userId          String
+  role            WorkspaceRole
+  status          MembershipStatus @default(ACTIVE)
+  invitedByUserId String?
+  invitedAt       DateTime?
+  joinedAt        DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, userId])
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@index([role])
+  @@index([status])
+}
+
+//////////////////////////////////////////////////////
+// USER / IDENTITY
+//////////////////////////////////////////////////////
+
+model User {
+  id String @id @default(cuid())
+
+  // legacy fields kept temporarily
+  tenantId String?
+  role     String  @default("OWNER")
+
+  email              String    @unique
+  passwordHash       String?
+  fullName           String?
+  firstName          String?
+  lastName           String?
+  avatarUrl          String?
+  jobTitle           String?
+  jobFunction        String?
+  isActive           Boolean   @default(true)
+  lastLoginAt        DateTime?
+  defaultWorkspaceId String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  tenant           Tenant?    @relation(fields: [tenantId], references: [id])
+  defaultWorkspace Workspace? @relation("UserDefaultWorkspace", fields: [defaultWorkspaceId], references: [id], onDelete: SetNull)
+
+  identities              UserIdentity[]
+  organizationMemberships OrganizationMembership[]
+  workspaceMemberships    WorkspaceMembership[]
+
+  createdMedia           Media[]          @relation("MediaCreatedByUser")
+  createdFolders         MediaFolder[]    @relation("FolderCreatedByUser")
+  createdScreens         Screen[]         @relation("ScreenCreatedByUser")
+  createdPlaylists       Playlist[]       @relation("PlaylistCreatedByUser")
+  createdChannels        Channel[]        @relation("ChannelCreatedByUser")
+  auditLogs              AuditLog[]       @relation("AuditActorUser")
+  pairingSessionsCreated PairingSession[] @relation("PairingSessionCreatedByUser")
+  pairingSessionsClaimed PairingSession[] @relation("PairingSessionClaimedByUser")
+
+  @@index([tenantId])
+  @@index([defaultWorkspaceId])
+}
+
+model UserIdentity {
+  id             String   @id @default(cuid())
+  userId         String
+  provider       String
+  providerUserId String
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+}
+
+//////////////////////////////////////////////////////
+// LICENSES
+//////////////////////////////////////////////////////
+
+model License {
+  id String @id @default(cuid())
+
+  // legacy transitional ownership
+  tenantId String?
+
+  // canonical ownership
+  organizationId String
+
+  licenseType String
+  status      LicenseStatus
+  planCode    String?
+  startsAt    DateTime
+  expiresAt   DateTime
+  trialDays   Int?
+  screenQuota Int           @default(0)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tenant       Tenant?      @relation(fields: [tenantId], references: [id])
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([organizationId])
+  @@index([status])
+  @@index([startsAt])
+  @@index([expiresAt])
+}
+
+//////////////////////////////////////////////////////
+// MEDIA / FOLDERS
+//////////////////////////////////////////////////////
+
+model MediaFolder {
+  id String @id @default(cuid())
+
+  organizationId String
+  workspaceId    String?
+  name           String
+  parentId       String?
+
+  visibilityScope MediaVisibilityScope @default(WORKSPACE)
+  ownerType       MediaOwnerType       @default(WORKSPACE)
+  createdByUserId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  parent   MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children MediaFolder[] @relation("MediaFolderTree")
+
+  createdBy User?   @relation("FolderCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  media     Media[]
+
+  @@unique([organizationId, workspaceId, parentId, name])
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([parentId])
+  @@index([visibilityScope])
+  @@index([ownerType])
+}
+
+model Media {
+  id String @id @default(cuid())
+
+  organizationId String
+  workspaceId    String?
+  folderId       String?
+
+  visibilityScope MediaVisibilityScope @default(WORKSPACE)
+  ownerType       MediaOwnerType       @default(WORKSPACE)
+
+  url        String
+  type       String
+  name       String?
+  mimeType   String?
+  sizeBytes  Int?
+  checksum   String? @unique
+  durationMs Int?
+
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  folder       MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("MediaCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  playlistItems PlaylistItem[]
+
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([folderId])
+  @@index([type])
+  @@index([createdAt])
+  @@index([visibilityScope])
+  @@index([ownerType])
+}
+
+//////////////////////////////////////////////////////
+// PLAYLISTS
+//////////////////////////////////////////////////////
+
+model Playlist {
+  id String @id @default(cuid())
+
+  organizationId String
+  workspaceId    String?
+
+  name            String
+  isArchived      Boolean  @default(false)
+  createdByUserId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("PlaylistCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
   items   PlaylistItem[]
-  screens Screen[]
+  screens Screen[]       @relation("ScreenAssignedPlaylist")
+
+  @@unique([organizationId, workspaceId, name])
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([isArchived])
 }
 
 model PlaylistItem {
-  id        String   @id @default(cuid())
+  id         String @id @default(cuid())
   playlistId String
   mediaId    String
 
@@ -66,89 +479,54 @@ model PlaylistItem {
   media    Media    @relation(fields: [mediaId], references: [id], onDelete: Restrict)
   playlist Playlist @relation(fields: [playlistId], references: [id], onDelete: Cascade)
 
+  @@unique([playlistId, order])
   @@index([playlistId])
   @@index([mediaId])
 }
 
-model MediaFolder {
-  id        String   @id @default(cuid())
-  name      String
-  parentId  String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  parent   MediaFolder?  @relation("MediaFolderTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children MediaFolder[] @relation("MediaFolderTree")
-  media    Media[]
-
-  @@unique([parentId, name])
-  @@index([parentId])
-}
-
-model Media {
-  id   String @id @default(cuid())
-  url  String
-  type String
-
-  // Display name (original filename)
-  name     String?
-  mimeType String?
-  sizeBytes Int?
-
-  // SHA-256 checksum used for dedupe
-  checksum String? @unique
-
-  // Optional: video duration in ms (can be filled later)
-  durationMs Int?
-
-  folderId String?
-  folder   MediaFolder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  playlistItems PlaylistItem[]
-
-  @@index([folderId])
-  @@index([type])
-  @@index([createdAt])
-}
-
-model VirtualScreenSession {
-  id         String   @id @default(uuid())
-  pairingCode String  @unique
-  createdAt  DateTime @default(now())
-
-  @@index([createdAt])
-}
+//////////////////////////////////////////////////////
+// CHANNELS
+//////////////////////////////////////////////////////
 
 model Channel {
-  id          String             @id @default(uuid()) @db.Uuid
+  id String @id @default(uuid()) @db.Uuid
+
+  organizationId String
+  workspaceId    String?
+
   name        String
   orientation ChannelOrientation @default(landscape)
   layoutId    String             @default("default")
 
-  zones      Json @default("{}")
-  transition Json?
-  width      Int?
-  height     Int?
-  updatedBy  String?
+  zones           Json    @default("{}")
+  transition      Json?
+  width           Int?
+  height          Int?
+  updatedBy       String?
+  createdByUserId String?
+  isArchived      Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // ✅ add opposite relation (required by Prisma)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  createdBy    User?        @relation("ChannelCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
   zoneItems ChannelZoneItem[]
 
+  @@unique([organizationId, workspaceId, name])
+  @@index([organizationId])
+  @@index([workspaceId])
   @@index([layoutId])
   @@index([orientation])
+  @@index([isArchived])
 }
 
 model ChannelZoneItem {
-  id String @id @default(cuid())
-  clientId String?  // ✅ add this
-  // ✅ must be UUID to match Channel.id
-  channelId String @db.Uuid
+  id        String  @id @default(cuid())
+  clientId  String?
+  channelId String  @db.Uuid
   zoneId    String
 
   sourceType String
@@ -166,32 +544,188 @@ model ChannelZoneItem {
 
   channel Channel @relation(fields: [channelId], references: [id], onDelete: Cascade)
 
+  @@unique([channelId, zoneId, clientId])
   @@index([channelId])
   @@index([zoneId])
-   @@unique([channelId, zoneId, clientId]) // ✅ if you rely on clientId
 }
 
-enum ChannelOrientation {
-  landscape
-  portrait
+//////////////////////////////////////////////////////
+// SCREENS
+//////////////////////////////////////////////////////
+
+model Screen {
+  id String @id @default(cuid())
+
+  organizationId String
+  workspaceId    String?
+
+  name       String?
+  lastSeenAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runtimeKey String @unique @default(uuid())
+
+  assignedPlaylistId  String?
+  assignedContentType String?
+  assignedContentId   String?
+
+  orientation ScreenOrientation @default(LANDSCAPE)
+  timezone    String?
+
+  status     ScreenStatus @default(PENDING)
+  pairedAt   DateTime?
+  isVirtual  Boolean      @default(false)
+  isArchived Boolean      @default(false)
+
+  createdByUserId String?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+
+  assignedPlaylist   Playlist?           @relation("ScreenAssignedPlaylist", fields: [assignedPlaylistId], references: [id], onDelete: SetNull)
+  createdBy          User?               @relation("ScreenCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  screenGroupMembers ScreenGroupMember[]
+  pairingSessions    PairingSession[]
+
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([runtimeKey])
+  @@index([status])
+  @@index([pairedAt])
+  @@index([lastSeenAt])
 }
 
-enum ScreenOrientation {
-  LANDSCAPE
-  LANDSCAPE_FLIPPED
-  PORTRAIT
-  PORTRAIT_FLIPPED
+model PairingSession {
+  id          String               @id @default(cuid())
+  pairingCode String               @unique
+  sessionType PairingSessionType
+  status      PairingSessionStatus @default(OPEN)
+
+  organizationId  String?
+  workspaceId     String?
+  createdByUserId String?
+
+  screenId        String?
+  deviceId        String?
+  expiresAt       DateTime
+  claimedAt       DateTime?
+  claimedByUserId String?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  metadata        Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy    User?         @relation("PairingSessionCreatedByUser", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  claimedBy    User?         @relation("PairingSessionClaimedByUser", fields: [claimedByUserId], references: [id], onDelete: SetNull)
+  screen       Screen?       @relation(fields: [screenId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([screenId])
+  @@index([status])
+  @@index([expiresAt])
+  @@index([createdByUserId])
+  @@index([claimedByUserId])
+  @@index([deviceId])
 }
 
-model License {
-  id          String   @id @default(cuid())
-  tenantId    String?  @unique
-  licenseType String   // TRIAL | PAID
-  status      String   // ACTIVE | EXPIRED | SUSPENDED | CANCELLED
-  planCode    String?  // BASIC | PRO | ENTERPRISE
-  startsAt    DateTime
-  expiresAt   DateTime
-  trialDays   Int?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+//////////////////////////////////////////////////////
+// SCREEN GROUPS / NOTIFICATIONS
+//////////////////////////////////////////////////////
+
+model ScreenGroup {
+  id             String   @id @default(cuid())
+  organizationId String?
+  workspaceId    String
+  name           String
+  description    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  members    ScreenGroupMember[]
+  recipients NotificationRecipient[]
+
+  @@unique([workspaceId, name])
+  @@index([organizationId])
+  @@index([workspaceId])
+}
+
+model ScreenGroupMember {
+  id            String   @id @default(cuid())
+  screenGroupId String
+  screenId      String
+  createdAt     DateTime @default(now())
+
+  screenGroup ScreenGroup @relation(fields: [screenGroupId], references: [id], onDelete: Cascade)
+  screen      Screen      @relation(fields: [screenId], references: [id], onDelete: Cascade)
+
+  @@unique([screenGroupId, screenId])
+  @@index([screenGroupId])
+  @@index([screenId])
+}
+
+model NotificationRecipient {
+  id             String                @id @default(cuid())
+  organizationId String
+  workspaceId    String?
+  screenGroupId  String?
+  eventType      NotificationEventType
+  email          String
+  isActive       Boolean               @default(true)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  screenGroup  ScreenGroup? @relation(fields: [screenGroupId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([screenGroupId])
+  @@index([eventType])
+  @@index([email])
+}
+
+//////////////////////////////////////////////////////
+// AUDIT LOGS
+//////////////////////////////////////////////////////
+
+model AuditLog {
+  id             String         @id @default(cuid())
+  organizationId String
+  workspaceId    String?
+  actorType      AuditActorType
+  actorUserId    String?
+  action         AuditAction
+
+  entityType  String
+  entityId    String?
+  entityLabel String?
+
+  metadata  Json?
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  workspace    Workspace?   @relation(fields: [workspaceId], references: [id], onDelete: SetNull)
+  actorUser    User?        @relation("AuditActorUser", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId])
+  @@index([workspaceId])
+  @@index([actorUserId])
+  @@index([action])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([createdAt])
 }

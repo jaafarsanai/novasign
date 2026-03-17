@@ -16,9 +16,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(txt || `HTTP ${res.status}`);
   }
 
-  // allow empty responses
   const contentType = res.headers.get("content-type") || "";
-  if (!contentType.includes("application/json")) return (undefined as any);
+  if (!contentType.includes("application/json")) return undefined as T;
   return (await res.json()) as T;
 }
 
@@ -40,7 +39,107 @@ export function apiPut<T = any>(path: string, body?: any) {
   });
 }
 
+export function apiPatch<T = any>(path: string, body?: any) {
+  return request<T>(path, {
+    method: "PATCH",
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+}
+
 export function apiDelete<T = any>(path: string) {
   return request<T>(path, { method: "DELETE" });
 }
 
+export type MeResponse = {
+  user: {
+    id: string;
+    email: string;
+    fullName: string | null;
+    defaultWorkspaceId: string | null;
+    isActive?: boolean;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
+  organization: {
+    id: string;
+    name: string;
+    slug: string;
+    isActive: boolean;
+    timezone?: string | null;
+    createdAt?: string;
+    updatedAt?: string;
+  } | null;
+  auth: {
+    userId: string;
+    email: string;
+    organizationId: string;
+    activeWorkspaceId: string | null;
+    organizationRole: string;
+    workspaceRole: string | null;
+  };
+  workspaces: Array<{
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+    role: string;
+    timezone?: string | null;
+  }>;
+};
+
+export type LicenseSummaryResponse = {
+  totalQuota: number;
+  used: number;
+  available: number;
+  activeLicenses: number;
+  timezone: string;
+  trial: null | {
+    isTrial: boolean;
+    status: string;
+    startsAt: string;
+    expiresAt: string;
+    trialDays: number;
+    screenQuota: number;
+    isExpired: boolean;
+    daysRemaining: number | null;
+    timezone: string;
+  };
+  licenses: Array<{
+    id: string;
+    licenseType: string;
+    status: string;
+    screenQuota: number;
+    trialDays: number | null;
+    startsAt: string;
+    expiresAt: string;
+  }>;
+};
+
+export async function getMe(): Promise<MeResponse | null> {
+  try {
+    const res = await fetch("/api/auth/me", {
+      method: "GET",
+      credentials: "include",
+    });
+
+    if (res.status === 401) return null;
+    if (!res.ok) return null;
+
+    return (await res.json()) as MeResponse;
+  } catch {
+    return null;
+  }
+}
+
+export function getLicenseSummary() {
+  return apiGet<LicenseSummaryResponse>("/licenses/summary");
+}
+
+export async function logoutRequest() {
+  document.cookie =
+    "pp_access_token=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax";
+  await fetch("/api/auth/logout", {
+    method: "POST",
+    credentials: "include",
+  }).catch(() => {});
+}

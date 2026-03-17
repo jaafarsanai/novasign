@@ -1,4 +1,6 @@
 import { NestFactory } from "@nestjs/core";
+import { ValidationPipe } from "@nestjs/common";
+import cookieParser from "cookie-parser";
 import { AppModule } from "./app.module";
 import { SocketIoAdapter } from "./ws/socket-io.adapter";
 
@@ -7,13 +9,25 @@ async function bootstrap() {
     cors: { origin: true, credentials: true },
   });
 
-  // ✅ REST endpoints stay under /api/*
   app.setGlobalPrefix("api");
+  app.use(cookieParser());
 
-  // ✅ Socket.IO stays on /ws (not affected by global prefix)
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+
+  app.enableCors({
+    origin: true,
+    credentials: true,
+  });
+
+  // IMPORTANT: make Socket.IO use /ws
   app.useWebSocketAdapter(new SocketIoAdapter(app));
 
   await app.listen(3001);
 }
 bootstrap();
-

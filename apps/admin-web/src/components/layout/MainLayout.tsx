@@ -1,6 +1,7 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { brand } from "../../config/brand";
+import LicenseNoticeBar from "../license/LicenseNoticeBar";
 import "./MainLayout.css";
 
 type MainLayoutProps = {
@@ -86,12 +87,7 @@ const MainLayout: React.FC<MainLayoutProps> = ({ children, activeMenu }) => {
       </aside>
 
       <div className="ns-main">
-        <div className="ns-subscription-bar">
-          <span>8 days left! Activate your subscription now.</span>
-          <button type="button" className="ns-subscription-btn">
-            Subscribe Now
-          </button>
-        </div>
+        <LicenseNoticeBar />
 
         <header className="ns-main-header">
           <div className="ns-main-header-left">

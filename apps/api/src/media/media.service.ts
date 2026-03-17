@@ -1,113 +1,307 @@
-import { BadRequestException, Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
 import { promises as fsp } from "fs";
 import { basename, extname } from "path";
 import { randomUUID } from "crypto";
+import { AuthContext } from "../auth/interfaces/auth-context.interface";
+import { isOrgAdmin } from "../auth/role-helpers";
 
 @Injectable()
 export class MediaService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // media.service.ts
+  private requireActiveWorkspaceId(auth: AuthContext): string {
+    if (!auth.activeWorkspaceId) {
+      throw new BadRequestException("No active workspace selected");
+    }
+    return auth.activeWorkspaceId;
+  }
 
-async list(opts?: {
-  search?: string;
-  type?: string;
-  folderId?: string;
-  includeFolders?: boolean;
-}) {
-  const q = (opts?.search || "").trim();
-  const t = (opts?.type || "").trim().toLowerCase();
-  const folderIdRaw = opts?.folderId != null ? String(opts.folderId) : undefined;
-  const includeFolders = !!opts?.includeFolders;
+  private buildVisibleMediaWhere(auth: AuthContext, extraWhere?: any) {
+    const workspaceId = this.requireActiveWorkspaceId(auth);
 
-  const and: any[] = [];
-
-  if (q) {
-    and.push({
-      OR: [
-        { name: { contains: q, mode: "insensitive" } },
-        { type: { contains: q, mode: "insensitive" } },
-        { url: { contains: q, mode: "insensitive" } },
+    return {
+      organizationId: auth.organizationId,
+      AND: [
+        {
+          OR: [
+            { visibilityScope: "GLOBAL" },
+            {
+              visibilityScope: "WORKSPACE",
+              workspaceId,
+            },
+          ],
+        },
+        ...(extraWhere ? [extraWhere] : []),
       ],
+    };
+  }
+
+  private async getScopedMediaOrThrow(auth: AuthContext, mediaId: string) {
+    const media = await this.prisma.media.findUnique({
+      where: { id: mediaId },
+      select: {
+        id: true,
+        organizationId: true,
+        workspaceId: true,
+        visibilityScope: true,
+        ownerType: true,
+        folderId: true,
+        url: true,
+        name: true,
+      },
     });
+
+    if (!media || media.organizationId !== auth.organizationId) {
+      throw new NotFoundException("Media not found");
+    }
+
+    if (
+      !isOrgAdmin(auth) &&
+      !(
+        media.visibilityScope === "GLOBAL" ||
+        (media.visibilityScope === "WORKSPACE" && media.workspaceId === auth.activeWorkspaceId)
+      )
+    ) {
+      throw new ForbiddenException("Media is not accessible in active workspace");
+    }
+
+    return media;
   }
 
-  if (t && (t === "image" || t === "video")) {
-    and.push({ type: t });
+  private async assertCanDeleteMedia(auth: AuthContext, mediaId: string) {
+    const media = await this.prisma.media.findUnique({
+      where: { id: mediaId },
+      select: {
+        id: true,
+        organizationId: true,
+        workspaceId: true,
+        visibilityScope: true,
+        ownerType: true,
+        url: true,
+      },
+    });
+
+    if (!media || media.organizationId !== auth.organizationId) {
+      throw new NotFoundException("Media not found");
+    }
+
+    if (isOrgAdmin(auth)) {
+      return media;
+    }
+
+    if (media.ownerType !== "WORKSPACE" || media.workspaceId !== auth.activeWorkspaceId) {
+      throw new ForbiddenException(
+        "You cannot delete media owned by another workspace or the organization",
+      );
+    }
+
+    return media;
   }
 
-  // folderId semantics:
-  // - folderId=root => folderId null
-  // - folderId=<id> => that folder
-  if (folderIdRaw) {
-    if (folderIdRaw === "root") and.push({ folderId: null });
-    else and.push({ folderId: folderIdRaw });
+  private async assertFolderAccessible(
+    auth: AuthContext,
+    folderId: string,
+  ): Promise<{
+    id: string;
+    organizationId: string;
+    workspaceId: string | null;
+    visibilityScope: "GLOBAL" | "WORKSPACE";
+    ownerType: "ORGANIZATION" | "WORKSPACE";
+  }> {
+    const folder = await this.prisma.mediaFolder.findUnique({
+      where: { id: folderId },
+      select: {
+        id: true,
+        organizationId: true,
+        workspaceId: true,
+        visibilityScope: true,
+        ownerType: true,
+      },
+    });
+
+    if (!folder || folder.organizationId !== auth.organizationId) {
+      throw new BadRequestException("Folder not found");
+    }
+
+    if (
+      !isOrgAdmin(auth) &&
+      !(
+        folder.visibilityScope === "GLOBAL" ||
+        (folder.visibilityScope === "WORKSPACE" && folder.workspaceId === auth.activeWorkspaceId)
+      )
+    ) {
+      throw new ForbiddenException("Folder is not accessible in active workspace");
+    }
+
+    return folder as any;
   }
 
-  const items = await this.prisma.media.findMany({
-    where: and.length ? { AND: and } : undefined,
-    orderBy: { createdAt: "desc" },
-  });
+  async list(
+    auth: AuthContext,
+    opts?: {
+      search?: string;
+      type?: string;
+      folderId?: string;
+      includeFolders?: boolean;
+    },
+  ) {
+    const q = (opts?.search || "").trim();
+    const t = (opts?.type || "").trim().toLowerCase();
+    const folderIdRaw = opts?.folderId != null ? String(opts.folderId) : undefined;
+    const includeFolders = !!opts?.includeFolders;
 
-  // ✅ folders under current "folderId"
-  // NOTE: only meaningful when folderId is provided (root or specific)
-  let folders: Array<{ id: string; name: string; parentId: string | null }> = [];
+    const and: any[] = [];
 
-  if (includeFolders) {
-    const parentId =
-      folderIdRaw == null
-        ? null
-        : folderIdRaw === "root"
-          ? null
-          : folderIdRaw;
+    if (q) {
+      and.push({
+        OR: [
+          { name: { contains: q, mode: "insensitive" } },
+          { type: { contains: q, mode: "insensitive" } },
+          { url: { contains: q, mode: "insensitive" } },
+        ],
+      });
+    }
 
-    const folderWhere: any = { parentId };
+    if (t && (t === "image" || t === "video")) {
+      and.push({ type: t });
+    }
 
-    // Optional: apply search filter to folders too (nice UX)
-    if (q) folderWhere.name = { contains: q, mode: "insensitive" };
+    if (folderIdRaw) {
+      if (folderIdRaw === "root") {
+        and.push({ folderId: null });
+      } else {
+        await this.assertFolderAccessible(auth, folderIdRaw);
+        and.push({ folderId: folderIdRaw });
+      }
+    }
 
-    const f = await this.prisma.mediaFolder.findMany({
-      where: folderWhere,
-      orderBy: { name: "asc" },
+    const items = await this.prisma.media.findMany({
+      where: this.buildVisibleMediaWhere(auth, and.length ? { AND: and } : undefined),
+      orderBy: { createdAt: "desc" },
+    });
+
+    let folders: Array<{ id: string; name: string; parentId: string | null }> = [];
+
+    if (includeFolders) {
+      const parentId =
+        folderIdRaw == null ? null : folderIdRaw === "root" ? null : folderIdRaw;
+
+      const folderAnd: any[] = [];
+
+      if (parentId === null) {
+        folderAnd.push({ parentId: null });
+      } else {
+        folderAnd.push({ parentId });
+      }
+
+      if (q) {
+        folderAnd.push({ name: { contains: q, mode: "insensitive" } });
+      }
+
+      const folderWhere = {
+        organizationId: auth.organizationId,
+        AND: [
+          {
+            OR: [
+              { visibilityScope: "GLOBAL" },
+              {
+                visibilityScope: "WORKSPACE",
+                workspaceId: this.requireActiveWorkspaceId(auth),
+              },
+            ],
+          },
+          ...folderAnd,
+        ],
+      };
+
+      const f = await this.prisma.mediaFolder.findMany({
+        where: folderWhere,
+        orderBy: { name: "asc" },
+        select: { id: true, name: true, parentId: true },
+      });
+
+      folders = f.map((x) => ({
+        id: String(x.id),
+        name: String(x.name),
+        parentId: x.parentId ? String(x.parentId) : null,
+      }));
+    }
+
+    return { items, folders };
+  }
+
+  async listFolders(auth: AuthContext, opts?: { parentId?: string }) {
+    const parentIdRaw = String(opts?.parentId ?? "root");
+
+    const and: any[] = [];
+
+    if (parentIdRaw === "root") {
+      and.push({ parentId: null });
+    } else {
+      await this.assertFolderAccessible(auth, parentIdRaw);
+      and.push({ parentId: parentIdRaw });
+    }
+
+    return this.prisma.mediaFolder.findMany({
+      where: {
+        organizationId: auth.organizationId,
+        AND: [
+          {
+            OR: [
+              { visibilityScope: "GLOBAL" },
+              {
+                visibilityScope: "WORKSPACE",
+                workspaceId: this.requireActiveWorkspaceId(auth),
+              },
+            ],
+          },
+          ...and,
+        ],
+      },
       select: { id: true, name: true, parentId: true },
+      orderBy: { name: "asc" },
     });
-
-    folders = f.map((x) => ({
-      id: String(x.id),
-      name: String(x.name),
-      parentId: x.parentId ? String(x.parentId) : null,
-    }));
   }
 
-  return { items, folders };
-}
-
-async listFolders(opts?: { parentId?: string }) {
-  const parentIdRaw = String(opts?.parentId ?? "root");
-
-  const where =
-    parentIdRaw === "root"
-      ? { parentId: null }
-      : { parentId: parentIdRaw };
-
-  return this.prisma.mediaFolder.findMany({
-    where,
-    select: { id: true, name: true, parentId: true },
-    orderBy: { name: "asc" },
-  });
-}
-
-
-  /**
-   * meta rows are matched by (originalname + size)
-   */
   async createManyFromUploads(
+    auth: AuthContext,
     files: Express.Multer.File[],
     folderId?: string | null,
-    meta?: Array<{ name: string; size: number; durationMs?: number }>
+    meta?: Array<{ name: string; size: number; durationMs?: number }>,
   ) {
+    const workspaceId = this.requireActiveWorkspaceId(auth);
     const created: any[] = [];
+
+    let targetFolder:
+      | {
+          id: string;
+          organizationId: string;
+          workspaceId: string | null;
+          visibilityScope: "GLOBAL" | "WORKSPACE";
+          ownerType: "ORGANIZATION" | "WORKSPACE";
+        }
+      | undefined;
+
+    if (folderId) {
+      targetFolder = await this.assertFolderAccessible(auth, String(folderId));
+
+      if (!isOrgAdmin(auth)) {
+        if (
+          targetFolder.visibilityScope !== "WORKSPACE" ||
+          targetFolder.workspaceId !== auth.activeWorkspaceId
+        ) {
+          throw new ForbiddenException(
+            "Workspace users can only upload into folders owned by their active workspace",
+          );
+        }
+      }
+    }
 
     const metaMap = new Map<string, number>();
     for (const m of meta || []) {
@@ -120,16 +314,22 @@ async listFolders(opts?: { parentId?: string }) {
       const mime = (f.mimetype || "").toLowerCase();
       const type = mime.startsWith("video/") ? "video" : "image";
 
-      // Ensure a persisted filename exists.
       const persisted = await this.ensurePersistedFile(f);
-
       const url = `/api/media/${persisted.filename}`;
 
       const key = `${String(f.originalname || "")}|${Number((f as any).size || 0)}`;
-      const durationMs = type === "video" ? (metaMap.get(key) ?? null) : null;
+      const durationMs = type === "video" ? metaMap.get(key) ?? null : null;
 
       const row = await this.prisma.media.create({
         data: {
+          organizationId: auth.organizationId,
+          workspaceId:
+            targetFolder?.visibilityScope === "GLOBAL" ? null : workspaceId,
+          visibilityScope:
+            targetFolder?.visibilityScope ?? "WORKSPACE",
+          ownerType:
+            targetFolder?.ownerType ?? "WORKSPACE",
+          createdByUserId: auth.userId,
           url,
           type,
           name: f.originalname ?? persisted.filename ?? null,
@@ -146,15 +346,40 @@ async listFolders(opts?: { parentId?: string }) {
     return created;
   }
 
-  async move(mediaId: string, folderId: string | null) {
-    const m = await this.prisma.media.findUnique({ where: { id: mediaId } });
-    if (!m) throw new BadRequestException("Media not found");
+  async move(auth: AuthContext, mediaId: string, folderId: string | null) {
+    const media = await this.getScopedMediaOrThrow(auth, mediaId);
 
-    const nextFolderId = folderId ? String(folderId) : null;
+    let nextFolderId = folderId ? String(folderId) : null;
+    let targetFolder:
+      | {
+          id: string;
+          organizationId: string;
+          workspaceId: string | null;
+          visibilityScope: "GLOBAL" | "WORKSPACE";
+          ownerType: "ORGANIZATION" | "WORKSPACE";
+        }
+      | null = null;
 
     if (nextFolderId) {
-      const f = await this.prisma.mediaFolder.findUnique({ where: { id: nextFolderId } });
-      if (!f) throw new BadRequestException("Target folder not found");
+      targetFolder = await this.assertFolderAccessible(auth, nextFolderId);
+    }
+
+    if (!isOrgAdmin(auth)) {
+      if (media.ownerType !== "WORKSPACE" || media.workspaceId !== auth.activeWorkspaceId) {
+        throw new ForbiddenException(
+          "You can only move media owned by your active workspace",
+        );
+      }
+
+      if (
+        targetFolder &&
+        (targetFolder.visibilityScope !== "WORKSPACE" ||
+          targetFolder.workspaceId !== auth.activeWorkspaceId)
+      ) {
+        throw new ForbiddenException(
+          "You can only move media into folders owned by your active workspace",
+        );
+      }
     }
 
     const updated = await this.prisma.media.update({
@@ -165,28 +390,59 @@ async listFolders(opts?: { parentId?: string }) {
     return { ok: true, item: updated };
   }
 
-  async usage(mediaId: string) {
+  async usage(auth: AuthContext, mediaId: string) {
+    await this.getScopedMediaOrThrow(auth, mediaId);
+
     const rows = await this.prisma.playlistItem.findMany({
-      where: { mediaId },
-      select: { playlist: { select: { id: true, name: true } } },
+      where: {
+        mediaId,
+        playlist: {
+          organizationId: auth.organizationId,
+        },
+      },
+      select: {
+        playlist: {
+          select: { id: true, name: true, workspaceId: true, organizationId: true },
+        },
+      },
     });
 
     const map = new Map<string, { id: string; name: string }>();
     for (const r of rows) {
-      if (r.playlist) map.set(r.playlist.id, r.playlist);
+      if (!r.playlist) continue;
+
+      if (!isOrgAdmin(auth) && r.playlist.workspaceId !== auth.activeWorkspaceId) {
+        continue;
+      }
+
+      map.set(r.playlist.id, { id: r.playlist.id, name: r.playlist.name });
     }
 
     return { mediaId, playlists: Array.from(map.values()) };
   }
 
-  async usageBulk(ids: string[]) {
+  async usageBulk(auth: AuthContext, ids: string[]) {
     const uniq = Array.from(new Set(ids.map(String)));
 
+    const mediaRows = await this.prisma.media.findMany({
+      where: this.buildVisibleMediaWhere(auth, { id: { in: uniq } }),
+      select: { id: true },
+    });
+
+    const allowedIds = mediaRows.map((m) => String(m.id));
+
     const rows = await this.prisma.playlistItem.findMany({
-      where: { mediaId: { in: uniq } },
+      where: {
+        mediaId: { in: allowedIds },
+        playlist: {
+          organizationId: auth.organizationId,
+        },
+      },
       select: {
         mediaId: true,
-        playlist: { select: { id: true, name: true } },
+        playlist: {
+          select: { id: true, name: true, workspaceId: true },
+        },
       },
     });
 
@@ -194,10 +450,17 @@ async listFolders(opts?: { parentId?: string }) {
     for (const r of rows) {
       const mid = String(r.mediaId);
       if (!byMedia.has(mid)) byMedia.set(mid, new Map());
-      if (r.playlist) byMedia.get(mid)!.set(r.playlist.id, r.playlist);
+
+      if (!r.playlist) continue;
+      if (!isOrgAdmin(auth) && r.playlist.workspaceId !== auth.activeWorkspaceId) continue;
+
+      byMedia.get(mid)!.set(r.playlist.id, {
+        id: r.playlist.id,
+        name: r.playlist.name,
+      });
     }
 
-    const items = uniq.map((mid) => ({
+    const items = allowedIds.map((mid) => ({
       mediaId: mid,
       playlists: Array.from(byMedia.get(mid)?.values() || []),
     }));
@@ -205,9 +468,8 @@ async listFolders(opts?: { parentId?: string }) {
     return { items };
   }
 
-  async remove(id: string) {
-    const media = await this.prisma.media.findUnique({ where: { id } });
-    if (!media) throw new BadRequestException("Media not found");
+  async remove(auth: AuthContext, id: string) {
+    const media = await this.assertCanDeleteMedia(auth, id);
 
     await this.prisma.media.delete({ where: { id } });
     await this.tryDeleteDiskFile(media.url);
@@ -215,29 +477,50 @@ async listFolders(opts?: { parentId?: string }) {
     return { ok: true };
   }
 
-  async bulkDelete(ids: string[]) {
+  async bulkDelete(auth: AuthContext, ids: string[]) {
     const uniq = Array.from(new Set(ids.map(String)));
     if (uniq.length === 0) throw new BadRequestException("Missing ids[]");
 
     const medias = await this.prisma.media.findMany({
-      where: { id: { in: uniq } },
-      select: { id: true, url: true },
+      where: {
+        id: { in: uniq },
+        organizationId: auth.organizationId,
+      },
+      select: {
+        id: true,
+        url: true,
+        ownerType: true,
+        workspaceId: true,
+      },
     });
 
-    await this.prisma.media.deleteMany({ where: { id: { in: uniq } } });
+    if (!isOrgAdmin(auth)) {
+      const blocked = medias.find(
+        (m) => m.ownerType !== "WORKSPACE" || m.workspaceId !== auth.activeWorkspaceId,
+      );
+      if (blocked) {
+        throw new ForbiddenException(
+          "You cannot delete media owned by another workspace or the organization",
+        );
+      }
+    }
+
+    const allowedIds = medias.map((m) => m.id);
+
+    await this.prisma.media.deleteMany({
+      where: { id: { in: allowedIds } },
+    });
+
     await Promise.allSettled(medias.map((m) => this.tryDeleteDiskFile(m.url)));
 
-    return { ok: true, count: uniq.length };
+    return { ok: true, count: allowedIds.length };
   }
 
-  async getById(id: string) {
+  async getById(auth: AuthContext, id: string) {
+    await this.getScopedMediaOrThrow(auth, String(id));
     return this.prisma.media.findUnique({ where: { id: String(id) } });
   }
 
-  /**
-   * If multer used diskStorage, file.filename exists and file is already persisted.
-   * If memoryStorage, file.buffer exists but filename does not. We persist it.
-   */
   private async ensurePersistedFile(file: Express.Multer.File): Promise<{ filename: string }> {
     const existing = (file as any).filename;
     if (existing && typeof existing === "string" && existing.trim()) {

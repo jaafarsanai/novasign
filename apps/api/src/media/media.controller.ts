@@ -9,98 +9,94 @@ import {
   Query,
   Req,
   UploadedFiles,
+  UseGuards,
   UseInterceptors,
 } from "@nestjs/common";
 import { FilesInterceptor } from "@nestjs/platform-express";
 import { MediaService } from "./media.service";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { CurrentAuth } from "../auth/current-auth.decorator";
+import type { AuthContext } from "../auth/interfaces/auth-context.interface";
 
 @Controller("media")
+@UseGuards(JwtAuthGuard)
 export class MediaController {
   constructor(private readonly media: MediaService) {}
 
-  // media.controller.ts
+  @Get()
+  async list(
+    @CurrentAuth() auth: AuthContext,
+    @Query("search") search?: string,
+    @Query("type") type?: string,
+    @Query("folderId") folderId?: string,
+    @Query("includeFolders") includeFolders?: string,
+  ) {
+    const include = String(includeFolders ?? "").toLowerCase() === "true";
 
-@Get()
-async list(
-  @Query("search") search?: string,
-  @Query("type") type?: string,
-  @Query("folderId") folderId?: string,
-  @Query("includeFolders") includeFolders?: string,
-) {
-  const include = String(includeFolders ?? "").toLowerCase() === "true";
+    const result = await this.media.list(auth, {
+      search,
+      type,
+      folderId: folderId ? String(folderId) : undefined,
+      includeFolders: include,
+    });
 
-  const rawItems: any = await this.media.list({
-    search,
-    type,
-    folderId: folderId ? String(folderId) : undefined,
-  });
+    const items: any[] = Array.isArray(result?.items) ? result.items : [];
+    const folders: any[] = Array.isArray(result?.folders) ? result.folders : [];
 
-  // ✅ normalize to array
-  const items: any[] =
-    Array.isArray(rawItems) ? rawItems :
-    Array.isArray(rawItems?.items) ? rawItems.items :
-    Array.isArray(rawItems?.items?.items) ? rawItems.items.items :
-    Array.isArray(rawItems?.data) ? rawItems.data :
-    [];
-
-  if (!include) return { items };
-
-  const rawFolders: any = await this.media.listFolders({
-    parentId: folderId ? String(folderId) : "root",
-  });
-
-  // ✅ normalize to array
-  const folders: any[] =
-    Array.isArray(rawFolders) ? rawFolders :
-    Array.isArray(rawFolders?.items) ? rawFolders.items :
-    Array.isArray(rawFolders?.folders) ? rawFolders.folders :
-    [];
-
-  return { items, folders };
-}
-
+    if (!include) return { items };
+    return { items, folders };
+  }
 
   @Get(":id/usage")
-  async usage(@Param("id") id: string) {
+  async usage(@CurrentAuth() auth: AuthContext, @Param("id") id: string) {
     if (!id) throw new BadRequestException("Missing media id");
-    return this.media.usage(id);
+    return this.media.usage(auth, id);
   }
-  
 
   @Post("usage")
-  async usageBulk(@Body() body: { ids?: string[] }) {
+  async usageBulk(
+    @CurrentAuth() auth: AuthContext,
+    @Body() body: { ids?: string[] },
+  ) {
     const ids = Array.isArray(body?.ids) ? body.ids.filter(Boolean).map(String) : [];
     if (ids.length === 0) throw new BadRequestException("Missing ids[]");
-    return this.media.usageBulk(ids);
+    return this.media.usageBulk(auth, ids);
   }
 
   @Post(":id/move")
-  async move(@Param("id") id: string, @Body() body: { folderId?: string | null }) {
+  async move(
+    @CurrentAuth() auth: AuthContext,
+    @Param("id") id: string,
+    @Body() body: { folderId?: string | null },
+  ) {
     if (!id) throw new BadRequestException("Missing media id");
-    return this.media.move(id, body?.folderId ?? null);
+    return this.media.move(auth, id, body?.folderId ?? null);
   }
 
   @Delete(":id")
-  async remove(@Param("id") id: string) {
+  async remove(@CurrentAuth() auth: AuthContext, @Param("id") id: string) {
     if (!id) throw new BadRequestException("Missing media id");
-    return this.media.remove(id);
+    return this.media.remove(auth, id);
   }
 
   @Post("bulk-delete")
-  async bulkDelete(@Body() body: { ids?: string[] }) {
+  async bulkDelete(
+    @CurrentAuth() auth: AuthContext,
+    @Body() body: { ids?: string[] },
+  ) {
     const ids = Array.isArray(body?.ids) ? body.ids.filter(Boolean).map(String) : [];
     if (ids.length === 0) throw new BadRequestException("Missing ids[]");
-    return this.media.bulkDelete(ids);
+    return this.media.bulkDelete(auth, ids);
   }
 
   @Post("upload")
   @UseInterceptors(FilesInterceptor("files"))
   async upload(
+    @CurrentAuth() auth: AuthContext,
     @UploadedFiles() files: any[],
     @Query("folderId") folderId?: string,
-    @Req() req?: any
+    @Req() req?: any,
   ) {
-    // meta is optional; expected: [{ name: string, size: number, durationMs?: number }]
     let meta: Array<{ name: string; size: number; durationMs?: number }> = [];
     try {
       const raw = req?.body?.meta;
@@ -112,8 +108,13 @@ async list(
       meta = [];
     }
 
-    const items = await this.media.createManyFromUploads(files || [], folderId ? String(folderId) : null, meta);
+    const items = await this.media.createManyFromUploads(
+      auth,
+      files || [],
+      folderId ? String(folderId) : null,
+      meta,
+    );
+
     return { items, count: items.length };
   }
 }
-

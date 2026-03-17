@@ -8,6 +8,7 @@ import {
 } from "@nestjs/websockets";
 import type { Server, Socket } from "socket.io";
 import { ScreensService } from "../screens/screens.service";
+import { WsStateService } from "./ws-state.service";
 
 @WebSocketGateway({
   namespace: "/screens",
@@ -18,33 +19,51 @@ export class ScreensGateway {
   @WebSocketServer()
   server!: Server;
 
-  constructor(private readonly screens: ScreensService) {}
+  constructor(
+    private readonly screens: ScreensService,
+    private readonly wsState: WsStateService,
+  ) {}
 
-  afterInit(server: any) {
+  afterInit(_server: any) {
     this.logger.log("ScreensGateway initialized");
   }
 
-  handleConnection(client: Socket) {
-    // For devices you can pass pairingCode in query, but keep it permissive
-    const code = String(client.handshake?.query?.code ?? "").trim().toUpperCase();
-    if (code) client.join(`screen:${code}`);
+  async handleConnection(client: Socket) {
+    const runtimeKey = String(client.handshake?.query?.runtimeKey ?? "").trim();
+    if (!runtimeKey) return;
+
+    const screen = await this.screens.getByRuntimeKeyOrNull(runtimeKey);
+    if (!screen) return;
+
+    client.join(`screen:${screen.id}`);
+    (client.data as any).runtimeKey = runtimeKey;
+    (client.data as any).screenId = screen.id;
   }
 
   @SubscribeMessage("screen:ping")
   async onPing(
     @ConnectedSocket() client: Socket,
-    @MessageBody() body: { code?: string }
+    @MessageBody() body: { runtimeKey?: string },
   ) {
-    const code = String(body?.code ?? "").trim().toUpperCase();
-    if (!code) return;
+    const runtimeKey =
+      String(body?.runtimeKey ?? (client.data as any)?.runtimeKey ?? "").trim();
 
-    client.join(`screen:${code}`);
+    if (!runtimeKey) return;
 
-    // ✅ updates lastSeenAt if the screen exists
-    await this.screens.touchLastSeenByPairingCode(code);
+    const screen = await this.screens.getByRuntimeKeyOrNull(runtimeKey);
+    if (!screen) return;
 
-    // Optional ack (useful for device debugging)
-    client.emit("screen:pong", { ok: true, code, ts: Date.now() });
+    client.join(`screen:${screen.id}`);
+    (client.data as any).runtimeKey = runtimeKey;
+    (client.data as any).screenId = screen.id;
+
+    await this.screens.touchLastSeenById(screen.id);
+    await this.wsState.broadcastScreenSeen(screen.id);
+
+    client.emit("screen:pong", {
+      ok: true,
+      screenId: screen.id,
+      ts: Date.now(),
+    });
   }
 }
-

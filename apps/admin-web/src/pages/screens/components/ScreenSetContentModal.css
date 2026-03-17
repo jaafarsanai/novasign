@@ -263,11 +263,16 @@
 }
 
 .scp-btn-yellow {
-  background: #f5c542;
-  border-color: #f5c542;
-  font-weight: 650;
+  background: var(--brand-primary);
+  color: var(--brand-sidebar-active-text);
+  border: 1px solid var(--brand-primary);
+   font-weight: 650;
 }
 
+.scp-btn-yellow:hover {
+  background: var(--brand-primary-dark);
+  border-color: var(--brand-primary-dark);
+}
 /* =========================
    MEDIA GRID
 ========================= */

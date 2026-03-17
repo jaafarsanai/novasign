@@ -1,22 +1,25 @@
-// src/pages/screens/types.ts
-
-// Status values used in ScreenTable (LIVE / PENDING / maybe OFFLINE later)
-export type ScreenStatus = "LIVE" | "PENDING" | "OFFLINE";
+export type ScreenStatus = "PENDING" | "PAIRED" | "OFFLINE" | "ARCHIVED";
 
 export interface Screen {
   id: string;
-  name: string;
+  name: string | null;
 
-  // 6-character pairing code shown on the device
-  pairingCode: string;
-
-  // LIVE / PENDING / OFFLINE
+  runtimeKey: string;
   status: ScreenStatus;
 
-  // ISO string or null if never seen
+  pairedAt?: string | null;
   lastSeenAt?: string | null;
 
-  // true if this screen was launched as a virtual screen
   isVirtual?: boolean;
-}
 
+  assignedPlaylistId?: string | null;
+  assignedPlaylistName?: string | null;
+
+  assignedContentType?: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
+  assignedContentId?: string | null;
+  assignedContentName?: string | null;
+
+  virtualSessionId?: string | null;
+  activePairingCode?: string | null;
+  orientation?: string;
+}

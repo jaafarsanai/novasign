@@ -5,10 +5,13 @@ import { ScreensService } from "../screens/screens.service";
 export type VSState = "PAIR" | "WAITING" | "PLAYING" | "UNKNOWN";
 
 export type VsStatePayload = {
-  code: string;
+  runtimeKey: string;
   state: VSState;
   updatedAt: number;
   playlistAssigned: boolean;
+  exists: boolean;
+  screenId: string | null;
+  isVirtual: boolean;
   orientation?: any;
 };
 
@@ -21,10 +24,17 @@ export type VsPlaylistItem = {
 };
 
 export type VsPlaylistPayload = {
-  code: string;
+  runtimeKey: string;
   playlistId: string | null;
   updatedAt: number;
   items: VsPlaylistItem[];
+  channel?: {
+    channelId: string;
+    layoutId: string | null;
+    orientation?: "landscape" | "portrait";
+    zones: Record<string, VsPlaylistItem[]>;
+    transition?: any;
+  };
 };
 
 @Injectable()
@@ -36,7 +46,6 @@ export class WsStateService {
 
   constructor(private readonly screens: ScreensService) {}
 
-  // Accept either Server or Namespace-like objects and normalize
   bindServer(anyServer: any) {
     const s = anyServer?.of ? anyServer : anyServer?.server?.of ? anyServer.server : null;
     if (!s) {
@@ -50,9 +59,11 @@ export class WsStateService {
   setIo(io: any) {
     this.bindServer(io);
   }
+
   setServer(io: any) {
     this.bindServer(io);
   }
+
   bindIo(io: any) {
     this.bindServer(io);
   }
@@ -62,72 +73,101 @@ export class WsStateService {
     return this.io;
   }
 
-  private normCode(raw: string): string {
-    return (raw || "").trim().toUpperCase();
+  private normRuntimeKey(raw: string): string {
+    return String(raw || "").trim();
+  }
+
+  private normScreenId(raw: string): string {
+    return String(raw || "").trim();
   }
 
   // -----------------------------
-  // Virtual-screen channel
+  // Virtual-screen runtime channel
+  // Room key: screen:{screenId}
+  // Runtime auth: runtimeKey
   // -----------------------------
-  async pushVirtualScreenState(rawCode: string) {
+  async pushVirtualScreenStateByRuntimeKey(rawRuntimeKey: string) {
     const io = this.ensureIo();
-    const code = this.normCode(rawCode);
-    if (!code) return;
+    const runtimeKey = this.normRuntimeKey(rawRuntimeKey);
+    if (!runtimeKey) return;
 
-    const payload = await this.screens.getVirtualScreenStatePayload(code);
-    io.of("/virtual-screen").to(`code:${payload.code}`).emit("vs:state", payload);
+    const payload = await this.screens.getVirtualScreenStatePayloadByRuntimeKey(runtimeKey);
+    if (!payload?.screenId) return payload;
+
+    io.of("/virtual-screen")
+      .to(`screen:${payload.screenId}`)
+      .emit("vs:state", payload);
+
     return payload;
   }
 
-  async pushVirtualScreenPlaylist(rawCode: string) {
+  async pushVirtualScreenPlaylistByRuntimeKey(rawRuntimeKey: string) {
     const io = this.ensureIo();
-    const code = this.normCode(rawCode);
-    if (!code) return;
+    const runtimeKey = this.normRuntimeKey(rawRuntimeKey);
+    if (!runtimeKey) return;
 
-    const payload = await this.screens.getVirtualScreenPlaylistPayload(code);
-    io.of("/virtual-screen").to(`code:${payload.code}`).emit("vs:playlist", payload);
+    const payload = await this.screens.getVirtualScreenPlaylistPayloadByRuntimeKey(runtimeKey);
+    const state = await this.screens.getVirtualScreenStatePayloadByRuntimeKey(runtimeKey);
+
+    if (!state?.screenId) return payload;
+
+    io.of("/virtual-screen")
+      .to(`screen:${state.screenId}`)
+      .emit("vs:playlist", payload);
+
     return payload;
   }
 
-  async pushVirtualScreenBundle(rawCode: string) {
-    const state = await this.pushVirtualScreenState(rawCode);
-    const playlist = await this.pushVirtualScreenPlaylist(rawCode);
+  async pushVirtualScreenBundleByRuntimeKey(rawRuntimeKey: string) {
+    const state = await this.pushVirtualScreenStateByRuntimeKey(rawRuntimeKey);
+    const playlist = await this.pushVirtualScreenPlaylistByRuntimeKey(rawRuntimeKey);
     return { state, playlist };
   }
 
-  async pushVirtualScreenBundleToClient(client: Socket, rawCode: string) {
-    const code = this.normCode(rawCode);
-    if (!code) {
-      client.emit("vs:state", {
-  code: "",
-  state: "PAIR",
-  updatedAt: Date.now(),
-  playlistAssigned: false,
-  orientation: "LANDSCAPE",
-} satisfies VsStatePayload);
+  async pushVirtualScreenBundleToClientByRuntimeKey(client: Socket, rawRuntimeKey: string) {
+    const runtimeKey = this.normRuntimeKey(rawRuntimeKey);
 
-client.emit("vs:playlist", {
-  code: "",
-  playlistId: null,
-  updatedAt: Date.now(),
-  items: [],
-} satisfies VsPlaylistPayload);
+    if (!runtimeKey) {
+      client.emit("vs:state", {
+        runtimeKey: "",
+        state: "PAIR",
+        updatedAt: Date.now(),
+        playlistAssigned: false,
+        exists: false,
+        screenId: null,
+        isVirtual: false,
+        orientation: "LANDSCAPE",
+      } satisfies VsStatePayload);
+
+      client.emit("vs:playlist", {
+        runtimeKey: "",
+        playlistId: null,
+        updatedAt: Date.now(),
+        items: [],
+      } satisfies VsPlaylistPayload);
+
       return;
     }
 
-    const state = await this.screens.getVirtualScreenStatePayload(code);
-    const playlist = await this.screens.getVirtualScreenPlaylistPayload(code);
+    const state = await this.screens.getVirtualScreenStatePayloadByRuntimeKey(runtimeKey);
+    const playlist = await this.screens.getVirtualScreenPlaylistPayloadByRuntimeKey(runtimeKey);
+
+    if (state?.screenId) {
+      client.join(`screen:${state.screenId}`);
+    }
 
     client.emit("vs:state", state);
     client.emit("vs:playlist", playlist);
   }
 
-  async pushVirtualScreenRefresh(rawCode: string) {
+  async pushScreenRefreshByScreenId(rawScreenId: string) {
     const io = this.ensureIo();
-    const code = this.normCode(rawCode);
-    if (!code) return;
+    const screenId = this.normScreenId(rawScreenId);
+    if (!screenId) return;
 
-    io.of("/virtual-screen").to(`code:${code}`).emit("vs:refresh", { code, ts: Date.now() });
+    io.of("/virtual-screen")
+      .to(`screen:${screenId}`)
+      .emit("vs:refresh", { screenId, ts: Date.now() });
   }
 
   // -----------------------------
@@ -135,7 +175,7 @@ client.emit("vs:playlist", {
   // -----------------------------
   async pushAdminScreenSnapshot(screenId: string) {
     const io = this.ensureIo();
-    const s = await this.screens.getAdminScreenSnapshotById(screenId);
+    const s = await this.screens.getScreenSnapshotByIdInternal(screenId);
     if (!s) return;
 
     io.of("/screens").emit("screens:snapshot", s);
@@ -154,14 +194,14 @@ client.emit("vs:playlist", {
     io.of("/screens").emit("screens:changed", { reason, ts: Date.now() });
   }
 
-  broadcastScreenSeen(pairingCode: string, lastSeenAtIso?: string) {
+  broadcastScreenSeen(screenId: string, lastSeenAtIso?: string) {
     const io = this.ensureIo();
-    const code = this.normCode(pairingCode);
-    if (!code) return;
+    const id = this.normScreenId(screenId);
+    if (!id) return;
+
     io.of("/screens").emit("screens:seen", {
-      pairingCode: code,
+      screenId: id,
       lastSeenAt: lastSeenAtIso ?? new Date().toISOString(),
     });
   }
 }
-

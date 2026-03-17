@@ -4,5 +4,7 @@ import VirtualScreenPage from "../virtual-screen/VirtualScreenPage";
 
 export default function PlayerPage() {
   const { code } = useParams();
-  return <VirtualScreenPage embed pairingCode={String(code ?? "").trim().toUpperCase()} />;
+  const pairingCode = String(code ?? "").trim().toUpperCase();
+
+  return <VirtualScreenPage embed pairingCode={pairingCode} />;
 }

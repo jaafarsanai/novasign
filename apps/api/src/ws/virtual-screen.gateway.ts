@@ -21,7 +21,7 @@ export class VirtualScreenGateway {
 
   constructor(
     private readonly wsState: WsStateService,
-    private readonly screens: ScreensService
+    private readonly screens: ScreensService,
   ) {}
 
   afterInit(server: any) {
@@ -29,68 +29,113 @@ export class VirtualScreenGateway {
     this.logger.log("VirtualScreenGateway initialized");
   }
 
-  handleConnection(client: Socket) {
-    const code = String(client.handshake.query?.code ?? "").trim().toUpperCase();
-    const role = String(client.handshake.query?.role ?? "virtual")
-      .trim()
-      .toLowerCase(); // "virtual" | "device"
+  async handleConnection(client: Socket) {
+    try {
+      const runtimeKey = String(client.handshake.query?.runtimeKey ?? "").trim();
+      const role = String(client.handshake.query?.role ?? "virtual")
+        .trim()
+        .toLowerCase();
 
-    (client.data as any).role = role;
-    (client.data as any).code = code;
+      (client.data as any).role = role;
+      (client.data as any).runtimeKey = runtimeKey;
 
-    // ✅ Only virtual tabs affect "virtual active" logic
-    if (role !== "device" && code) {
-      this.screens.markVirtualConnected(code);
+      if (!runtimeKey) {
+        client.emit("vs:state", {
+          runtimeKey: "",
+          state: "PAIR",
+          updatedAt: Date.now(),
+          playlistAssigned: false,
+          exists: false,
+          screenId: null,
+          isVirtual: false,
+          orientation: "LANDSCAPE",
+        });
+        return;
+      }
+
+      const state = await this.screens.getVirtualScreenStatePayloadByRuntimeKey(runtimeKey);
+
+      if (!state?.screenId) {
+        client.emit("vs:state", state);
+        return;
+      }
+
+      (client.data as any).screenId = state.screenId;
+      client.join(`screen:${state.screenId}`);
+
+      await this.screens.touchLastSeenByRuntimeKey(runtimeKey);
+      await this.wsState.pushAdminScreenSnapshot(state.screenId);
+
+      const nowIso = new Date().toISOString();
+      await this.wsState.broadcastScreenSeen(state.screenId, nowIso);
+
+      await this.wsState.pushVirtualScreenBundleToClientByRuntimeKey(client, runtimeKey);
+    } catch (error) {
+      this.logger.error("Virtual screen connection failed", error as any);
+      
     }
   }
 
-  handleDisconnect(client: Socket) {
-    const code =
-      String((client.data as any)?.code ?? client.handshake.query?.code ?? "")
-        .trim()
-        .toUpperCase();
+  async handleDisconnect(client: Socket) {
+    const screenId = String((client.data as any)?.screenId ?? "").trim();
+    if (!screenId) return;
 
-    const role = String((client.data as any)?.role ?? "virtual")
-      .trim()
-      .toLowerCase();
-
-    if (role !== "device" && code) {
-      this.screens.markVirtualDisconnected(code);
-    }
+    this.logger.debug(`Virtual-screen socket disconnected from screen room ${screenId}`);
   }
 
   @SubscribeMessage("vs:ping")
   async onPing(
     @ConnectedSocket() client: Socket,
-    @MessageBody() body: { code?: string }
+    @MessageBody() body: { runtimeKey?: string },
   ) {
-    const code = String(body?.code ?? "").trim().toUpperCase();
-    if (!code) return;
+    try {
+      const runtimeKey = String(
+        body?.runtimeKey ?? (client.data as any)?.runtimeKey ?? "",
+      ).trim();
 
-    const role = String((client.data as any)?.role ?? "virtual")
-      .trim()
-      .toLowerCase();
+      if (!runtimeKey) {
+        client.emit("vs:error", {
+          code: "MISSING_RUNTIME_KEY",
+          message: "Missing runtime key",
+        });
+        return;
+      }
 
-    (client.data as any).code = code;
+      (client.data as any).runtimeKey = runtimeKey;
 
-    client.join(`code:${code}`);
+      const state = await this.screens.getVirtualScreenStatePayloadByRuntimeKey(runtimeKey);
 
-    // ✅ CRITICAL: device must NOT mark virtual connected here
-    if (role !== "device") {
-      this.screens.markVirtualConnected(code);
+      if (!state?.screenId) {
+        client.emit("vs:state", state);
+        client.emit("vs:playlist", {
+          runtimeKey,
+          playlistId: null,
+          updatedAt: Date.now(),
+          items: [],
+        });
+        return;
+      }
+
+      (client.data as any).screenId = state.screenId;
+      client.join(`screen:${state.screenId}`);
+
+      await this.screens.touchLastSeenByRuntimeKey(runtimeKey);
+      await this.wsState.pushAdminScreenSnapshot(state.screenId);
+
+      const nowIso = new Date().toISOString();
+      await this.wsState.broadcastScreenSeen(state.screenId, nowIso);
+
+      const playlist = await this.screens.getVirtualScreenPlaylistPayloadByRuntimeKey(runtimeKey);
+
+      client.emit("vs:state", state);
+      client.emit("vs:playlist", playlist);
+      client.emit("vs:bundle", { state, playlist });
+    } catch (error) {
+      this.logger.error("Virtual screen ping failed", error as any);
+      client.emit("vs:error", {
+        code: "RUNTIME_RESOLUTION_FAILED",
+        message: "Unable to resolve runtime session",
+      });
     }
-
-    const s = await this.screens.getByPairingCodeOrNull(code);
-    if (s) {
-      await this.screens.touchLastSeenById(s.id);
-      await this.wsState.pushAdminScreenSnapshot(s.id);
-    }
-
-    const state = await this.screens.getVirtualScreenStatePayload(code);
-    const playlist = await this.screens.getVirtualScreenPlaylistPayload(code);
-
-    client.emit("vs:state", state);
-    client.emit("vs:playlist", playlist);
-    client.emit("vs:bundle", { state, playlist });
   }
 }

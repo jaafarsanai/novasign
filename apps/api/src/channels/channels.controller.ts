@@ -4,113 +4,102 @@ import {
   Controller,
   Delete,
   Get,
-  NotFoundException,
   Param,
   Post,
   Put,
   Query,
   Patch,
+  UseGuards,
 } from "@nestjs/common";
-import { PrismaService } from "../prisma/prisma.service";
+import { ChannelsService } from "./channels.service";
+import { JwtAuthGuard } from "../auth/jwt-auth.guard";
+import { CurrentAuth } from "../auth/current-auth.decorator";
+import type { AuthContext } from "../auth/interfaces/auth-context.interface";
 
 type Orientation = "landscape" | "portrait";
 
 @Controller("/channels")
+@UseGuards(JwtAuthGuard)
 export class ChannelsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly channels: ChannelsService) {}
 
-@Get()
-async list(@Query("search") search?: string) {
-  const s = (search || "").trim();
-  const items = await this.prisma.channel.findMany({
-    where: s ? { name: { contains: s, mode: "insensitive" } } : undefined,
-    orderBy: { createdAt: "desc" },
-    select: {
-      id: true,
-      name: true,
-      orientation: true,
-      layoutId: true,
-      updatedAt: true,
-      createdAt: true,
-    },
-  });
-  return { items };
-}
+  @Get()
+  async list(
+    @CurrentAuth() auth: AuthContext,
+    @Query("search") search?: string,
+  ) {
+    const items = await this.channels.list(auth, search);
+    return { items };
+  }
 
   @Get(":id")
-  async getById(@Param("id") id: string) {
-    const item = await this.prisma.channel.findUnique({ where: { id } });
-    return { item: item ?? null };
+  async getById(
+    @CurrentAuth() auth: AuthContext,
+    @Param("id") id: string,
+  ) {
+    const item = await this.channels.get(auth, id);
+    return { item };
   }
 
   @Post()
-  async create(@Body() dto: { name: string; orientation: Orientation }) {
-    const item = await this.prisma.channel.create({
-      data: {
-        name: dto?.name ?? "Untitled",
-        orientation: dto?.orientation ?? "landscape",
-        layoutId: "default",
-        zones: {}, // JSON
-        transition: { enabled: false, type: "slide", duration: 0.5, direction: "right" } as any,
-      },
+  async create(
+    @CurrentAuth() auth: AuthContext,
+    @Body() dto: { name: string; orientation: Orientation },
+  ) {
+    const item = await this.channels.create(auth, {
+      name: dto?.name ?? "Untitled",
+      orientation: dto?.orientation ?? "landscape",
     });
     return { item };
   }
 
   @Patch(":id")
   async patch(
+    @CurrentAuth() auth: AuthContext,
     @Param("id") id: string,
-    @Body() dto: Partial<{ name: string; orientation: Orientation; layoutId: string; zones: any; transition: any }>,
+    @Body()
+    dto: Partial<{
+      name: string;
+      orientation: Orientation;
+      layoutId: string;
+      zones: any;
+      transition: any;
+    }>,
   ) {
-    return this.update(id, dto);
+    return this.update(auth, id, dto);
   }
 
   @Put(":id")
   async update(
+    @CurrentAuth() auth: AuthContext,
     @Param("id") id: string,
-    @Body() dto: Partial<{ name: string; orientation: Orientation; layoutId: string; zones: any; transition: any }>,
+    @Body()
+    dto: Partial<{
+      name: string;
+      orientation: Orientation;
+      layoutId: string;
+      zones: any;
+      transition: any;
+    }>,
   ) {
-    try {
-      const item = await this.prisma.channel.update({
-        where: { id },
-        data: {
-          ...dto,
-          updatedAt: new Date(),
-        },
-      });
-      return { item };
-    } catch (e: any) {
-      if (e?.code === "P2025") throw new NotFoundException();
-      throw e;
-    }
+    const item = await this.channels.update(auth, id, dto);
+    return { item };
   }
 
   @Delete(":id")
-  async remove(@Param("id") id: string) {
-    try {
-      await this.prisma.channel.delete({ where: { id } });
-      return { ok: true };
-    } catch (e: any) {
-      if (e?.code === "P2025") throw new NotFoundException();
-      throw e;
-    }
+  async remove(
+    @CurrentAuth() auth: AuthContext,
+    @Param("id") id: string,
+  ) {
+    return this.channels.remove(auth, id);
   }
 
   @Post(":id/duplicate")
-  async duplicate(@Param("id") id: string) {
-    const src = await this.prisma.channel.findUnique({ where: { id } });
-    if (!src) return { item: null };
-
-    const copy = await this.prisma.channel.create({
-      data: {
-        name: `${src.name} (copy)`,
-        orientation: src.orientation as any,
-        layoutId: src.layoutId,
-        zones: src.zones as any,
-        transition: src.transition as any,
-      },
-    });
-
-    return { item: copy };
+  async duplicate(
+    @CurrentAuth() auth: AuthContext,
+    @Param("id") id: string,
+  ) {
+    const item = await this.channels.duplicate(auth, id);
+    return { item };
   }
 }

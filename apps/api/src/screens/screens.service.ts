@@ -1,8 +1,19 @@
-// apps/api/src/screens/screens.service.ts
-
-import { Injectable, NotFoundException, BadRequestException } from "@nestjs/common";
+import {
+  Injectable,
+  NotFoundException,
+  BadRequestException,
+  ForbiddenException,
+} from "@nestjs/common";
 import { PrismaService } from "../prisma/prisma.service";
-import { randomUUID } from "node:crypto";
+import type { AuthContext } from "../auth/interfaces/auth-context.interface";
+import { isOrgAdmin } from "../auth/role-helpers";
+import {
+  getZonedParts,
+  safeTimezone,
+  weekdayToScheduleDay,
+  zonedSecondsOfDay,
+} from "../common/timezone.util";
+import crypto from "node:crypto";
 
 function makeCode6() {
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -11,10 +22,14 @@ function makeCode6() {
   return out;
 }
 
+function addMinutes(date: Date, minutes: number) {
+  return new Date(date.getTime() + minutes * 60 * 1000);
+}
+
 type AdminScreenRow = {
   id: string;
   name: string | null;
-  pairingCode: string;
+  runtimeKey: string;
   pairedAt: string | null;
   lastSeenAt: string | null;
   isVirtual: boolean;
@@ -27,60 +42,24 @@ type AdminScreenRow = {
   assignedContentName: string | null;
 
   virtualSessionId: string | null;
-    orientation: any; // ScreenOrientation
+  activePairingCode: string | null;
+  orientation: any;
+  status: any;
 };
 
 type VSState = "PAIR" | "WAITING" | "PLAYING" | "UNKNOWN";
 
 export type VsStatePayload = {
-  code: string;
+  runtimeKey: string;
   state: VSState;
   updatedAt: number;
   playlistAssigned: boolean;
-
   exists: boolean;
   screenId: string | null;
   isVirtual: boolean;
-    orientation: any; // ScreenOrientation
+  orientation: any;
 };
 
-export type VsPlaylistItem = {
-  id: string;
-  type: "image" | "video";
-  url: string;
-  order: number;
-  durationMs?: number;
-};
-
-export type VsPlaylistPayload = {
-  code: string;
-  playlistId: string | null;
-  updatedAt: number;
-  items: VsPlaylistItem[]; // legacy fullscreen path (use z1)
-
-  channel?: {
-    channelId: string;
-    layoutId: string | null;
-    orientation?: "landscape" | "portrait";
-    zones: Record<string, VsPlaylistItem[]>;
-    transition?: any; // Channel.transition (JSON)
-  };
-};
-
-function screenBaseOrientation(o: any): "landscape" | "portrait" {
-  const s = String(o ?? "LANDSCAPE").toUpperCase();
-  return s.startsWith("PORTRAIT") ? "portrait" : "landscape";
-}
-
-function normalizeMediaType(raw: unknown): "image" | "video" {
-  const t = String(raw ?? "").toLowerCase();
-  if (t === "video") return "video";
-  return "image";
-}
-
-/**
- * Scheduling types (mirrors admin-web/src/lib/scheduling.ts)
- */
 type Weekday = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
 
 type ScheduleTimeWindow = {
@@ -93,27 +72,64 @@ type ZoneItemSchedule = {
   id: string;
   mode: "everyday" | "weekly";
   weeklyDays: Weekday[];
-
   dateOnlyEnabled: boolean;
   dateStart: string | null;
   dateEnd: string | null;
   timeWindows: ScheduleTimeWindow[];
-
   playInFullScreen: boolean;
   priority: boolean;
 };
+
+export type VsPlaylistItem = {
+  id: string;
+  type: "image" | "video";
+  url: string;
+  order: number;
+  durationMs?: number;
+  schedule?: ZoneItemSchedule | null;
+  schedules?: ZoneItemSchedule[];
+  transitionType?: string;
+  transitionMs?: number;
+};
+
+export type VsPlaylistPayload = {
+  runtimeKey: string;
+  playlistId: string | null;
+  updatedAt: number;
+  items: VsPlaylistItem[];
+  channel?: {
+    channelId: string;
+    layoutId: string | null;
+    orientation?: "landscape" | "portrait";
+    zones: Record<string, VsPlaylistItem[]>;
+    transition?: any;
+  };
+};
+
+function screenBaseOrientation(o: any): "landscape" | "portrait" {
+  const s = String(o ?? "LANDSCAPE").toUpperCase();
+  return s.startsWith("PORTRAIT") ? "portrait" : "landscape";
+}
+
+function normalizeMediaType(raw: unknown): "image" | "video" {
+  const t = String(raw ?? "").toLowerCase();
+  return t === "video" ? "video" : "image";
+}
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
 }
 
-function toYmdLocal(d: Date) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+function toYmdInTimezone(d: Date, timeZone: string) {
+  return getZonedParts(d, timeZone).ymd;
 }
 
-function weekdayOf(d: Date): Weekday {
-  const map: Weekday[] = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"];
-  return map[d.getDay()];
+function weekdayOfInTimezone(d: Date, timeZone: string): Weekday {
+  return weekdayToScheduleDay(getZonedParts(d, timeZone).weekdayShort);
+}
+
+function nowSecOfDayInTimezone(d: Date, timeZone: string) {
+  return zonedSecondsOfDay(d, timeZone);
 }
 
 function clampInt(n: number, min: number, max: number) {
@@ -122,8 +138,8 @@ function clampInt(n: number, min: number, max: number) {
 
 function computeDurationMs(args: {
   type: "image" | "video";
-  json?: any; // zone json item (may contain durationMs/durationSec)
-  media?: { durationMs?: number | null }; // db media row
+  json?: any;
+  media?: { durationMs?: number | null };
 }): number | undefined {
   const { type, json, media } = args;
 
@@ -143,14 +159,12 @@ function computeDurationMs(args: {
       : undefined;
 
   if (type === "image") {
-    // image: always return something sane
     if (typeof jsonMs === "number" && jsonMs >= 500) return jsonMs;
     if (typeof jsonSec === "number" && jsonSec > 0) return Math.max(500, Math.floor(jsonSec * 1000));
     if (typeof dbMs === "number" && dbMs >= 500) return dbMs;
     return 5000;
   }
 
-  // video: ONLY accept explicit sane durationMs (no durationSec fallback, no tiny defaults)
   if (typeof jsonMs === "number" && jsonMs >= 1000) return jsonMs;
   if (typeof dbMs === "number" && dbMs >= 1000) return dbMs;
 
@@ -189,32 +203,23 @@ function timeToSec(hms: string) {
   return (h || 0) * 3600 + (m || 0) * 60 + (s || 0);
 }
 
-function nowSecOfDay(d: Date) {
-  return d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds();
-}
-
 function ensureSchedulesFromItem(it: any): ZoneItemSchedule[] {
   if (Array.isArray(it?.schedules) && it.schedules.length) return it.schedules as ZoneItemSchedule[];
   if (it?.schedule) return [it.schedule as ZoneItemSchedule];
   return [];
 }
 
-/**
- * ✅ Schedule evaluation (server-side)
- */
-function isScheduleActive(s: ZoneItemSchedule, now: Date) {
-  const ymd = toYmdLocal(now);
+function isScheduleActive(s: ZoneItemSchedule, now: Date, timeZone: string) {
+  const ymd = toYmdInTimezone(now, timeZone);
 
-  // 1) Date range gate
   if (s.dateOnlyEnabled) {
     if (!s.dateStart || !s.dateEnd) return false;
   }
   if (s.dateStart && ymd < s.dateStart) return false;
   if (s.dateEnd && ymd > s.dateEnd) return false;
 
-  // 2) Weekly gate
   if (s.mode === "weekly") {
-    const wd = weekdayOf(now);
+    const wd = weekdayOfInTimezone(now, timeZone);
     const days: Weekday[] =
       s.weeklyDays?.length
         ? (s.weeklyDays as Weekday[])
@@ -222,10 +227,9 @@ function isScheduleActive(s: ZoneItemSchedule, now: Date) {
     if (!days.includes(wd)) return false;
   }
 
-  // 3) Time window gate (any mode)
   if (!s.timeWindows || s.timeWindows.length === 0) return true;
 
-  const t = nowSecOfDay(now);
+  const t = nowSecOfDayInTimezone(now, timeZone);
   return s.timeWindows.some((w) => {
     const a = timeToSec(w.startTime);
     const b = timeToSec(w.endTime);
@@ -233,186 +237,678 @@ function isScheduleActive(s: ZoneItemSchedule, now: Date) {
   });
 }
 
-type VirtualSession = {
-  id: string;
-  pairingCode: string;
-  createdAtMs: number;
-  lastAccessAtMs: number;
-};
-
 @Injectable()
 export class ScreensService {
   constructor(private readonly prisma: PrismaService) {}
-
-  private readonly activeVirtualCodes = new Set<string>();
-  private readonly virtualSessionsById = new Map<string, VirtualSession>();
-  private readonly virtualSessionIdByCode = new Map<string, string>();
-
-  private static readonly SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
   private normCode(code: any) {
     return String(code || "").trim().toUpperCase();
   }
 
-  private makeSessionId() {
-    return randomUUID().replace(/-/g, "");
+  private normRuntimeKey(value: any) {
+    return String(value || "").trim();
   }
 
-  private pruneVirtualSessions(now = Date.now()) {
-    for (const [id, s] of this.virtualSessionsById) {
-      if (now - s.lastAccessAtMs > ScreensService.SESSION_TTL_MS) {
-        this.virtualSessionsById.delete(id);
-        const mapped = this.virtualSessionIdByCode.get(s.pairingCode);
-        if (mapped === id) this.virtualSessionIdByCode.delete(s.pairingCode);
-      }
+  private requireActiveWorkspaceId(auth: AuthContext): string {
+    if (!auth.activeWorkspaceId) {
+      throw new BadRequestException("No active workspace selected");
+    }
+    return auth.activeWorkspaceId;
+  }
+
+  private async expireOldPairingSessions() {
+    await this.prisma.pairingSession.updateMany({
+      where: {
+        status: "OPEN",
+        expiresAt: { lt: new Date() },
+      },
+      data: {
+        status: "EXPIRED",
+      },
+    });
+  }
+
+  private async assertOrganizationHasAvailableScreenSlot(organizationId: string) {
+    const now = new Date();
+
+    const activeLicenses = await this.prisma.license.findMany({
+      where: {
+        organizationId,
+        status: { in: ["ACTIVE", "TRIAL"] },
+        startsAt: { lte: now },
+        expiresAt: { gte: now },
+      },
+      select: { screenQuota: true },
+    });
+
+    const totalQuota = activeLicenses.reduce((sum, item) => sum + (item.screenQuota ?? 0), 0);
+
+    const used = await this.prisma.screen.count({
+      where: {
+        organizationId,
+        pairedAt: { not: null },
+        isArchived: false,
+      },
+    });
+
+    if (used >= totalQuota) {
+      throw new ForbiddenException(
+        `Screen quota reached. Used ${used}/${totalQuota}. Please unpair a screen or upgrade your license.`,
+      );
     }
   }
 
-  markVirtualConnected(rawCode: string) {
-    const code = this.normCode(rawCode);
-    if (code && code.length === 6) this.activeVirtualCodes.add(code);
-  }
+  private async generateUniquePairingCode() {
+    for (let i = 0; i < 50; i++) {
+      const pairingCode = makeCode6();
 
-  markVirtualDisconnected(rawCode: string) {
-    const code = this.normCode(rawCode);
-    if (code) this.activeVirtualCodes.delete(code);
-  }
+      const existingSession = await this.prisma.pairingSession.findUnique({
+        where: { pairingCode },
+        select: { id: true, status: true, expiresAt: true },
+      });
 
-  private isVirtualActive(rawCode: string) {
-    const code = this.normCode(rawCode);
-    return this.activeVirtualCodes.has(code);
-  }
+      if (!existingSession) return pairingCode;
 
-  private hasVirtualSessionForCode(rawCode: string) {
-    const code = this.normCode(rawCode);
-    return this.virtualSessionIdByCode.has(code);
-  }
+      const reusable =
+        existingSession.status !== "OPEN" ||
+        existingSession.expiresAt.getTime() < Date.now();
 
-  async createVirtualSession() {
-    this.pruneVirtualSessions();
-
-    let pairingCode = makeCode6();
-
-    for (let i = 0; i < 40; i++) {
-      const existsInDb = await this.prisma.screen.findFirst({ where: { pairingCode } });
-      const existsInSessions = this.virtualSessionIdByCode.has(pairingCode);
-      if (!existsInDb && !existsInSessions) break;
-      pairingCode = makeCode6();
+      if (reusable) return pairingCode;
     }
 
-    const id = this.makeSessionId();
-    const now = Date.now();
+    throw new BadRequestException("Unable to generate a unique pairing code");
+  }
 
-    const session: VirtualSession = {
-      id,
-      pairingCode,
-      createdAtMs: now,
-      lastAccessAtMs: now,
+  private async getScopedScreenOrThrow(auth: AuthContext, screenId: string) {
+    const screen = await this.prisma.screen.findUnique({
+      where: { id: screenId },
+      select: {
+        id: true,
+        organizationId: true,
+        workspaceId: true,
+        runtimeKey: true,
+        assignedPlaylistId: true,
+        assignedContentType: true,
+        assignedContentId: true,
+        orientation: true,
+        isVirtual: true,
+        pairedAt: true,
+        lastSeenAt: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+        status: true,
+        pairingSessions: {
+  where: {
+    status: "OPEN",
+    sessionType: { in: ["VIRTUAL_SCREEN", "DEVICE"] },
+  },
+  orderBy: { createdAt: "desc" },
+  select: {
+    id: true,
+    pairingCode: true,
+    sessionType: true,
+    deviceId: true,
+    screenId: true,
+  },
+},
+      },
+    });
+
+    if (!screen || screen.organizationId !== auth.organizationId) {
+      throw new NotFoundException("Screen not found");
+    }
+
+    if (!isOrgAdmin(auth) && screen.workspaceId !== auth.activeWorkspaceId) {
+      throw new ForbiddenException("Screen is outside active workspace");
+    }
+
+    return screen;
+  }
+
+  async getVirtualSessionStatusByIdOrThrow(sessionId: string) {
+    const id = String(sessionId || "").trim();
+    if (!id) {
+      throw new NotFoundException("Virtual session not found");
+    }
+
+    await this.expireOldPairingSessions();
+
+    const session = await this.prisma.pairingSession.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        pairingCode: true,
+        sessionType: true,
+        status: true,
+        expiresAt: true,
+        claimedAt: true,
+        screenId: true,
+        metadata: true,
+        screen: {
+          select: {
+            id: true,
+            runtimeKey: true,
+            status: true,
+            pairedAt: true,
+            isVirtual: true,
+            name: true,
+          },
+        },
+      },
+    });
+
+    if (!session || session.sessionType !== "VIRTUAL_SCREEN") {
+      throw new NotFoundException("Virtual session not found");
+    }
+
+    return {
+      id: session.id,
+      sessionType: session.sessionType,
+      status: session.status,
+      code: session.pairingCode,
+      expiresAt: session.expiresAt,
+      claimedAt: session.claimedAt ?? null,
+      screenId: session.screenId ?? session.screen?.id ?? null,
+      runtimeKey: session.screen?.runtimeKey ?? null,
+      screenStatus: session.screen?.status ?? null,
+      pairedAt: session.screen?.pairedAt ?? null,
+      isVirtual: session.screen?.isVirtual ?? true,
+      screenName: session.screen?.name ?? null,
+      metadata: session.metadata ?? null,
     };
-
-    this.virtualSessionsById.set(id, session);
-    this.virtualSessionIdByCode.set(pairingCode, id);
-
-    return { id, code: pairingCode };
   }
 
-  ensureVirtualSessionForCode(rawCode: string) {
-    this.pruneVirtualSessions();
+async createOrReusePreviewSessionForScreen(auth: AuthContext, screenId: string) {
+  await this.expireOldPairingSessions();
 
-    const code = this.normCode(rawCode);
-    if (!code || code.length !== 6) return null;
+  const screen = await this.getScopedScreenOrThrow(auth, screenId);
 
-    const existingId = this.virtualSessionIdByCode.get(code);
-    if (existingId && this.virtualSessionsById.has(existingId)) {
-      const s = this.virtualSessionsById.get(existingId)!;
-      s.lastAccessAtMs = Date.now();
-      return existingId;
-    }
-
-    const id = this.makeSessionId();
-    const now = Date.now();
-    const session: VirtualSession = { id, pairingCode: code, createdAtMs: now, lastAccessAtMs: now };
-
-    this.virtualSessionsById.set(id, session);
-    this.virtualSessionIdByCode.set(code, id);
-    return id;
+  if (!screen.isVirtual) {
+    throw new BadRequestException("Preview session is supported only for virtual screens");
   }
 
-async updateScreenById(
-  id: string,
-  dto: { name?: string; orientation?: "LANDSCAPE" | "LANDSCAPE_FLIPPED" | "PORTRAIT" | "PORTRAIT_FLIPPED" }
-) {
-  const existing = await this.prisma.screen.findUnique({
-    where: { id },
+  if (!screen.workspaceId) {
+    throw new BadRequestException("Virtual screen has no workspace");
+  }
+
+  const existingOpen = await this.prisma.pairingSession.findFirst({
+    where: {
+      screenId: screen.id,
+      sessionType: "VIRTUAL_SCREEN",
+      status: "OPEN",
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
     select: {
       id: true,
-      assignedPlaylistId: true,
-      assignedContentType: true,
-      assignedContentId: true,
-      orientation: true,
+      pairingCode: true,
+      expiresAt: true,
     },
   });
-  if (!existing) throw new NotFoundException("Screen not found");
 
-  // If changing orientation and current assignment is a channel, enforce compatibility
-  if (dto.orientation) {
-    const effectiveType =
-      (existing.assignedContentType as any) ?? (existing.assignedPlaylistId ? "PLAYLIST" : null);
-    const effectiveId =
-      (existing.assignedContentId as any) ?? (existing.assignedPlaylistId ?? null);
+  if (existingOpen) {
+    return {
+      id: existingOpen.id,
+      code: existingOpen.pairingCode,
+      expiresAt: existingOpen.expiresAt,
+    };
+  }
 
-    if (effectiveType === "CHANNEL" && effectiveId) {
-      const ch = await this.prisma.channel.findUnique({
-        where: { id: String(effectiveId) as any },
-        select: { orientation: true },
-      });
-      if (ch) {
+  await this.prisma.pairingSession.updateMany({
+    where: {
+      screenId: screen.id,
+      sessionType: "VIRTUAL_SCREEN",
+      status: "OPEN",
+    },
+    data: {
+      status: "CANCELLED",
+      cancelledAt: new Date(),
+      cancelReason: "replaced-by-new-preview-session",
+    },
+  });
+
+  const pairingCode = await this.generateUniquePairingCode();
+  const expiresAt = addMinutes(new Date(), 10);
+
+  const session = await this.prisma.pairingSession.create({
+    data: {
+      pairingCode,
+      sessionType: "VIRTUAL_SCREEN",
+      status: "OPEN",
+      organizationId: screen.organizationId,
+      workspaceId: screen.workspaceId,
+      createdByUserId: auth.userId,
+      screenId: screen.id,
+      expiresAt,
+      metadata: {
+        source: "screen-preview",
+        screenId: screen.id,
+      },
+    },
+    select: {
+      id: true,
+      pairingCode: true,
+      expiresAt: true,
+    },
+  });
+
+  return {
+    id: session.id,
+    code: session.pairingCode,
+    expiresAt: session.expiresAt,
+  };
+}
+
+async openVirtualScreenPreview(auth: AuthContext, screenId: string) {
+  const screen = await this.getScopedScreenOrThrow(auth, screenId);
+
+  if (!screen.isVirtual) {
+    throw new BadRequestException("Preview reopening is only supported for virtual screens");
+  }
+
+  if (!screen.runtimeKey) {
+    throw new BadRequestException("Virtual screen has no runtime key");
+  }
+
+  return {
+    screenId: screen.id,
+    runtimeKey: screen.runtimeKey,
+    previewUrl: `/virtual-screen/runtime/${screen.runtimeKey}`,
+  };
+}
+
+  async createVirtualSession(auth: AuthContext) {
+    await this.expireOldPairingSessions();
+
+    const workspaceId = this.requireActiveWorkspaceId(auth);
+    const pairingCode = await this.generateUniquePairingCode();
+    const expiresAt = addMinutes(new Date(), 10);
+
+    const session = await this.prisma.pairingSession.create({
+      data: {
+        pairingCode,
+        sessionType: "VIRTUAL_SCREEN",
+        status: "OPEN",
+        organizationId: auth.organizationId,
+        workspaceId,
+        createdByUserId: auth.userId,
+        expiresAt,
+        metadata: {
+          source: "admin-launch-virtual-screen",
+        },
+      },
+      select: {
+        id: true,
+        pairingCode: true,
+        expiresAt: true,
+      },
+    });
+
+    return {
+      id: session.id,
+      code: session.pairingCode,
+      expiresAt: session.expiresAt,
+    };
+  }
+
+  async updateScreenById(
+    auth: AuthContext,
+    id: string,
+    dto: {
+      name?: string;
+      orientation?: "LANDSCAPE" | "LANDSCAPE_FLIPPED" | "PORTRAIT" | "PORTRAIT_FLIPPED";
+    },
+  ) {
+    const existing = await this.getScopedScreenOrThrow(auth, id);
+
+    if (dto.orientation) {
+      const effectiveType =
+        (existing.assignedContentType as any) ?? (existing.assignedPlaylistId ? "PLAYLIST" : null);
+      const effectiveId = (existing.assignedContentId as any) ?? (existing.assignedPlaylistId ?? null);
+
+      if (effectiveType === "CHANNEL" && effectiveId) {
+        const ch = await this.prisma.channel.findUnique({
+          where: { id: String(effectiveId) as any },
+          select: { id: true, orientation: true, organizationId: true, workspaceId: true, isArchived: true },
+        });
+
+        if (!ch || ch.organizationId !== auth.organizationId || ch.isArchived) {
+          throw new NotFoundException("Channel not found");
+        }
+
+        if (!isOrgAdmin(auth) && ch.workspaceId !== auth.activeWorkspaceId) {
+          throw new ForbiddenException("Channel is outside active workspace");
+        }
+
         const so = screenBaseOrientation(dto.orientation);
         const co = String(ch.orientation ?? "landscape");
         if (so !== co) {
           throw new BadRequestException(
-            `Channel orientation (${co}) does not match screen orientation (${so}).`
+            `Channel orientation (${co}) does not match screen orientation (${so}).`,
           );
         }
       }
     }
+
+    const data: any = {};
+    if (dto.name != null) data.name = String(dto.name);
+    if (dto.orientation != null) data.orientation = dto.orientation;
+
+    try {
+      return await this.prisma.screen.update({
+        where: { id },
+        data,
+      });
+    } catch (e: any) {
+      if (e?.code === "P2025") throw new NotFoundException("Screen not found");
+      throw e;
+    }
   }
 
-  const data: any = {};
-  if (dto.name != null) data.name = String(dto.name);
-  if (dto.orientation != null) data.orientation = dto.orientation;
+  async getByRuntimeKeyOrNull(runtimeKey: string) {
+    const key = this.normRuntimeKey(runtimeKey);
+    if (!key) return null;
 
-  try {
-    return await this.prisma.screen.update({ where: { id }, data });
-  } catch (e: any) {
-    if (e?.code === "P2025") throw new NotFoundException("Screen not found");
-    throw e;
-  }
-}
-  async getByPairingCodeOrNull(pairingCode: string) {
-    const code = this.normCode(pairingCode);
-    if (!code) return null;
-
-    return this.prisma.screen.findFirst({
-      where: { pairingCode: code },
+    return this.prisma.screen.findUnique({
+      where: { runtimeKey: key },
       include: { assignedPlaylist: true },
     });
   }
 
   async touchLastSeenById(screenId: string) {
-  await this.prisma.$executeRaw`
-    UPDATE "Screen"
-    SET "lastSeenAt" = NOW()
-    WHERE "id" = ${screenId}
-  `;
+    await this.prisma.$executeRaw`
+      UPDATE "Screen"
+      SET "lastSeenAt" = NOW()
+      WHERE "id" = ${screenId}
+    `;
+  }
+  async bootstrapPlayerSession(input: {
+  code?: string;
+  deviceId?: string;
+  name?: string;
+  platform?: string;
+  manufacturer?: string;
+  model?: string;
+  os?: string;
+  sdk?: string;
+  sw?: string;
+  sh?: string;
+  densityDpi?: string;
+  ramMb?: string;
+  storageTotalMb?: string;
+  storageFreeMb?: string;
+}) {
+  await this.expireOldPairingSessions();
+
+  const pairingCode = this.normCode(String(input.code ?? ""));
+  if (!pairingCode || pairingCode.length !== 6) {
+    throw new BadRequestException("Invalid pairing code");
+  }
+
+  const deviceId = String(input.deviceId ?? "").trim() || null;
+  const now = new Date();
+  const expiresAt = addMinutes(now, 10);
+
+  const metadata = {
+    source: "android-player-bootstrap",
+    role: "device",
+    name: String(input.name ?? "").trim() || "Android Player",
+    platform: String(input.platform ?? "").trim() || "android",
+    manufacturer: String(input.manufacturer ?? "").trim() || null,
+    model: String(input.model ?? "").trim() || null,
+    os: String(input.os ?? "").trim() || null,
+    sdk: String(input.sdk ?? "").trim() || null,
+    sw: String(input.sw ?? "").trim() || null,
+    sh: String(input.sh ?? "").trim() || null,
+    densityDpi: String(input.densityDpi ?? "").trim() || null,
+    ramMb: String(input.ramMb ?? "").trim() || null,
+    storageTotalMb: String(input.storageTotalMb ?? "").trim() || null,
+    storageFreeMb: String(input.storageFreeMb ?? "").trim() || null,
+    bootstrappedAt: now.toISOString(),
+  };
+
+  const existingOpen = await this.prisma.pairingSession.findUnique({
+    where: { pairingCode },
+    select: {
+      id: true,
+      pairingCode: true,
+      sessionType: true,
+      status: true,
+      expiresAt: true,
+      organizationId: true,
+      workspaceId: true,
+      screenId: true,
+      deviceId: true,
+      metadata: true,
+    },
+  });
+
+ if (existingOpen) {
+  if (existingOpen.sessionType === "DEVICE") {
+    const reopened = await this.prisma.pairingSession.update({
+      where: { id: existingOpen.id },
+      data: {
+        status: "OPEN",
+        expiresAt,
+        deviceId,
+        metadata,
+        claimedAt: null,
+        claimedByUserId: null,
+        cancelledAt: null,
+        cancelReason: null,
+        screenId: null,
+        organizationId: null,
+        workspaceId: null,
+      },
+      select: {
+        id: true,
+        pairingCode: true,
+        expiresAt: true,
+        sessionType: true,
+        status: true,
+      },
+    });
+
+    return {
+      ok: true,
+      id: reopened.id,
+      code: reopened.pairingCode,
+      expiresAt: reopened.expiresAt,
+      sessionType: reopened.sessionType,
+      status: reopened.status,
+    };
+  }
+
+  throw new BadRequestException("Pairing code is already in use");
 }
 
-  async touchLastSeenByPairingCode(rawCode: string) {
-    const code = this.normCode(rawCode);
-    if (!code) return;
+  const session = await this.prisma.pairingSession.create({
+    data: {
+      pairingCode,
+      sessionType: "DEVICE",
+      status: "OPEN",
+      organizationId: null,
+      workspaceId: null,
+      createdByUserId: null,
+      screenId: null,
+      deviceId,
+      expiresAt,
+      metadata,
+    },
+    select: {
+      id: true,
+      pairingCode: true,
+      expiresAt: true,
+      sessionType: true,
+      status: true,
+    },
+  });
 
-    const s = await this.prisma.screen.findFirst({
-      where: { pairingCode: code },
+  return {
+    ok: true,
+    id: session.id,
+    code: session.pairingCode,
+    expiresAt: session.expiresAt,
+    sessionType: session.sessionType,
+    status: session.status,
+  };
+}
+async getPlayerCodeStatus(rawCode: string) {
+  const pairingCode = this.normCode(rawCode);
+
+  if (!pairingCode || pairingCode.length !== 6) {
+    return {
+      code: pairingCode || "",
+      found: false,
+      status: "INVALID",
+      claimed: false,
+      runtimeKey: null,
+      screenId: null,
+      isVirtual: false,
+      orientation: "LANDSCAPE",
+    };
+  }
+
+  await this.expireOldPairingSessions();
+
+  const session = await this.prisma.pairingSession.findUnique({
+    where: { pairingCode },
+    select: {
+      id: true,
+      pairingCode: true,
+      sessionType: true,
+      status: true,
+      expiresAt: true,
+      screenId: true,
+      screen: {
+        select: {
+          id: true,
+          runtimeKey: true,
+          isVirtual: true,
+          orientation: true,
+          status: true,
+        },
+      },
+    },
+  });
+
+  if (!session) {
+    return {
+      code: pairingCode,
+      found: false,
+      status: "OPEN",
+      claimed: false,
+      runtimeKey: null,
+      screenId: null,
+      isVirtual: false,
+      orientation: "LANDSCAPE",
+    };
+  }
+
+  const expired = session.expiresAt.getTime() < Date.now();
+
+  if (session.status === "CLAIMED" && session.screen?.runtimeKey) {
+    return {
+      code: pairingCode,
+      found: true,
+      status: "CLAIMED",
+      claimed: true,
+      runtimeKey: session.screen.runtimeKey,
+      screenId: session.screen.id,
+      isVirtual: !!session.screen.isVirtual,
+      orientation: session.screen.orientation ?? "LANDSCAPE",
+    };
+  }
+
+  if (expired || session.status === "EXPIRED") {
+    return {
+      code: pairingCode,
+      found: true,
+      status: "EXPIRED",
+      claimed: false,
+      runtimeKey: null,
+      screenId: session.screenId ?? null,
+      isVirtual: false,
+      orientation: "LANDSCAPE",
+    };
+  }
+
+  if (session.status === "CANCELLED") {
+    return {
+      code: pairingCode,
+      found: true,
+      status: "CANCELLED",
+      claimed: false,
+      runtimeKey: null,
+      screenId: session.screenId ?? null,
+      isVirtual: false,
+      orientation: "LANDSCAPE",
+    };
+  }
+
+  return {
+    code: pairingCode,
+    found: true,
+    status: "OPEN",
+    claimed: false,
+    runtimeKey: null,
+    screenId: session.screenId ?? null,
+    isVirtual: false,
+    orientation: "LANDSCAPE",
+  };
+}
+
+  async getRuntimeManifestByRuntimeKey(runtimeKey: string) {
+    const state = await this.getVirtualScreenStatePayloadByRuntimeKey(runtimeKey);
+    const playlist = await this.getVirtualScreenPlaylistPayloadByRuntimeKey(runtimeKey);
+
+    const assetsMap = new Map<
+      string,
+      { id: string; url: string; checksum?: string; mimeType?: string; updatedAt?: number }
+    >();
+
+    const collect = (id: string, url: string) => {
+      const key = String(id || url);
+      if (!key || !url) return;
+      if (!assetsMap.has(key)) {
+        assetsMap.set(key, {
+          id: key,
+          url: String(url),
+        });
+      }
+    };
+
+    for (const item of playlist.items ?? []) {
+      collect(item.id, item.url);
+    }
+
+    const zones = playlist.channel?.zones ?? {};
+    for (const value of Object.values(zones)) {
+      const arr = Array.isArray(value) ? value : [];
+      for (const item of arr as any[]) {
+        if (item?.id && item?.url) {
+          collect(String(item.id), String(item.url));
+        }
+      }
+    }
+
+    return {
+      runtimeKey,
+      screenId: state.screenId ?? "",
+      updatedAt: Math.max(Number(state.updatedAt ?? 0), Number(playlist.updatedAt ?? 0)),
+      state,
+      playlist,
+      assets: Array.from(assetsMap.values()),
+    };
+  }
+
+  async touchLastSeenByRuntimeKey(runtimeKey: string) {
+    const key = this.normRuntimeKey(runtimeKey);
+    if (!key) return;
+
+    const s = await this.prisma.screen.findUnique({
+      where: { runtimeKey: key },
       select: { id: true },
     });
 
@@ -420,159 +916,567 @@ async updateScreenById(
     await this.touchLastSeenById(s.id);
   }
 
-  getVirtualSessionByIdOrNull(sessionId: string) {
-    this.pruneVirtualSessions();
+  async getVirtualSessionStatusOrThrow(auth: AuthContext, sessionId: string) {
+    const id = String(sessionId || "").trim();
+    if (!id) {
+      throw new NotFoundException("Virtual session not found");
+    }
 
+    await this.expireOldPairingSessions();
+
+    const session = await this.prisma.pairingSession.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        pairingCode: true,
+        sessionType: true,
+        status: true,
+        organizationId: true,
+        workspaceId: true,
+        createdByUserId: true,
+        expiresAt: true,
+        claimedAt: true,
+        claimedByUserId: true,
+        screenId: true,
+        metadata: true,
+        screen: {
+          select: {
+            id: true,
+            runtimeKey: true,
+            status: true,
+            pairedAt: true,
+            isVirtual: true,
+            name: true,
+            organizationId: true,
+            workspaceId: true,
+          },
+        },
+      },
+    });
+
+    if (!session || session.sessionType !== "VIRTUAL_SCREEN") {
+      throw new NotFoundException("Virtual session not found");
+    }
+
+    if (session.organizationId !== auth.organizationId) {
+      throw new ForbiddenException("Virtual session belongs to another organization");
+    }
+
+    if (!isOrgAdmin(auth) && session.workspaceId !== auth.activeWorkspaceId) {
+      throw new ForbiddenException("Virtual session is outside active workspace");
+    }
+
+    return {
+      id: session.id,
+      sessionType: session.sessionType,
+      status: session.status,
+      code: session.pairingCode,
+      expiresAt: session.expiresAt,
+      claimedAt: session.claimedAt ?? null,
+      screenId: session.screen?.id ?? session.screenId ?? null,
+      runtimeKey: session.screen?.runtimeKey ?? null,
+      screenStatus: session.screen?.status ?? null,
+      pairedAt: session.screen?.pairedAt ?? null,
+      isVirtual: session.screen?.isVirtual ?? true,
+      screenName: session.screen?.name ?? null,
+      metadata: session.metadata ?? null,
+    };
+  }
+
+  async getVirtualSessionByIdOrNull(sessionId: string) {
     const id = String(sessionId || "").trim();
     if (!id) return null;
 
-    const s = this.virtualSessionsById.get(id) ?? null;
-    if (s) s.lastAccessAtMs = Date.now();
-    return s;
-  }
+    await this.expireOldPairingSessions();
 
-  getVirtualSessionIdByCodeOrNull(rawCode: string) {
-    this.pruneVirtualSessions();
-
-    const code = this.normCode(rawCode);
-    if (!code) return null;
-
-    const id = this.virtualSessionIdByCode.get(code) ?? null;
-    if (!id) return null;
-
-    const s = this.virtualSessionsById.get(id);
-    if (!s) {
-      this.virtualSessionIdByCode.delete(code);
-      return null;
-    }
-
-    s.lastAccessAtMs = Date.now();
-    return id;
-  }
-
-  async listScreensForAdmin(): Promise<AdminScreenRow[]> {
-    const rows = await this.prisma.screen.findMany({
-      orderBy: { createdAt: "desc" },
-      include: { assignedPlaylist: true },
-    });
-
-    return Promise.all(
-      rows.map(async (s): Promise<AdminScreenRow> => {
-        const assignedContentType =
-          (s.assignedContentType as any) ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
-
-        const assignedContentId = (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
-
-        const assignedContentName = await this.resolveAssignedContentName(
-          assignedContentType,
-          assignedContentId
-        );
-
-        const virtualSessionId = s.isVirtual ? this.ensureVirtualSessionForCode(s.pairingCode) : null;
-
-        return {
-          id: s.id,
-          name: s.name,
-          pairingCode: s.pairingCode,
-          pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
-          lastSeenAt: s.lastSeenAt ? s.lastSeenAt.toISOString() : null,
-          isVirtual: !!s.isVirtual,
-
-          assignedPlaylistId: s.assignedPlaylistId ?? null,
-          assignedPlaylistName: s.assignedPlaylist?.name ?? null,
-
-          assignedContentType,
-          assignedContentId,
-          assignedContentName,
-
-          virtualSessionId,
-          orientation: (s as any).orientation ?? "LANDSCAPE",
-        };
-      })
-    );
-  }
-
-// inside ScreensService class
-async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
-  const pairingCode = this.normCode(rawCode);
-  if (!pairingCode || pairingCode.length !== 6) {
-    throw new NotFoundException("Invalid pairing code");
-  }
-
-  const shouldBeVirtual =
-    this.hasVirtualSessionForCode(pairingCode) || this.isVirtualActive(pairingCode);
-
-  // ✅ If deviceId provided -> bind to that device row
-  if (deviceId && String(deviceId).trim()) {
-    const id = String(deviceId).trim();
-
-    const existingByCode = await this.prisma.screen.findFirst({ where: { pairingCode } });
-    if (existingByCode && existingByCode.id !== id) {
-      throw new BadRequestException("Pairing code is already used by another screen.");
-    }
-
-    const existingById = await this.prisma.screen.findUnique({ where: { id } }).catch(() => null);
-
-    if (!existingById) {
-      return this.prisma.screen.create({
-        data: {
-          id,
-          name: name?.trim() || "Android Player",
-          pairingCode,
-          pairedAt: new Date(),
-          lastSeenAt: null,
-          assignedPlaylistId: null,
-          assignedContentType: null,
-          assignedContentId: null,
-          isVirtual: false, // ✅ device
-        },
-      });
-    }
-
-    return this.prisma.screen.update({
+    return this.prisma.pairingSession.findUnique({
       where: { id },
-      data: {
-        name: name?.trim() || existingById.name,
-        pairingCode,
-        pairedAt: new Date(),
-        isVirtual: false, // ✅ force device
+      select: {
+        id: true,
+        pairingCode: true,
+        organizationId: true,
+        workspaceId: true,
+        createdByUserId: true,
+        expiresAt: true,
+        status: true,
+        sessionType: true,
       },
     });
   }
 
-  // ✅ Code-only pairing (admin enters code)
-  const existing = await this.prisma.screen.findFirst({ where: { pairingCode } });
+  async listScreens(auth: AuthContext): Promise<AdminScreenRow[]> {
+  const where = isOrgAdmin(auth)
+    ? {
+        organizationId: auth.organizationId,
+        isArchived: false,
+      }
+    : {
+        organizationId: auth.organizationId,
+        workspaceId: this.requireActiveWorkspaceId(auth),
+        isArchived: false,
+      };
 
-  if (!existing) {
-    return this.prisma.screen.create({
+  const rows = await this.prisma.screen.findMany({
+    where,
+    orderBy: { createdAt: "desc" },
+    include: {
+      assignedPlaylist: true,
+      pairingSessions: {
+        where: {
+          status: "OPEN",
+          sessionType: { in: ["VIRTUAL_SCREEN", "DEVICE"] },
+        },
+        orderBy: { createdAt: "desc" },
+        select: {
+          id: true,
+          pairingCode: true,
+          sessionType: true,
+          screenId: true,
+          deviceId: true,
+          expiresAt: true,
+        },
+      },
+    },
+  });
+
+  return Promise.all(
+    rows.map(async (s): Promise<AdminScreenRow> => {
+      const assignedContentType =
+        (s.assignedContentType as any) ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
+
+      const assignedContentId =
+        (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
+
+      const assignedContentName = await this.resolveAssignedContentName(
+        assignedContentType,
+        assignedContentId,
+      );
+
+      const latestOpenVirtual =
+        s.pairingSessions?.find((x) => x.sessionType === "VIRTUAL_SCREEN") ?? null;
+
+      const latestOpenDevice =
+        s.pairingSessions?.find((x) => x.sessionType === "DEVICE") ?? null;
+
+      const activePairingCode = s.isVirtual
+        ? latestOpenVirtual?.pairingCode ?? null
+        : latestOpenDevice?.pairingCode ?? null;
+
+      const virtualSessionId = s.isVirtual
+        ? latestOpenVirtual?.id ?? null
+        : null;
+
+      return {
+        id: s.id,
+        name: s.name,
+        runtimeKey: s.runtimeKey,
+        pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
+        lastSeenAt: s.lastSeenAt ? s.lastSeenAt.toISOString() : null,
+        isVirtual: !!s.isVirtual,
+        assignedPlaylistId: s.assignedPlaylistId ?? null,
+        assignedPlaylistName: s.assignedPlaylist?.name ?? null,
+        assignedContentType,
+        assignedContentId,
+        assignedContentName,
+        virtualSessionId,
+        activePairingCode,
+        orientation: (s as any).orientation ?? "LANDSCAPE",
+        status: (s as any).status ?? "PENDING",
+      };
+    }),
+  );
+}
+
+  async pairByCodeUpsert(
+    rawCode: string,
+    deviceId?: string,
+    name?: string,
+    auth?: AuthContext,
+  ) {
+    const pairingCode = this.normCode(rawCode);
+
+    if (!pairingCode || pairingCode.length !== 6) {
+      throw new NotFoundException("Invalid pairing code");
+    }
+
+    if (!auth?.organizationId || !auth?.activeWorkspaceId || !auth?.userId) {
+      throw new BadRequestException("Missing auth organization/workspace context");
+    }
+
+    await this.expireOldPairingSessions();
+
+    const session = await this.prisma.pairingSession.findUnique({
+      where: { pairingCode },
+      select: {
+        id: true,
+        pairingCode: true,
+        sessionType: true,
+        status: true,
+        organizationId: true,
+        workspaceId: true,
+        expiresAt: true,
+        screenId: true,
+      },
+    });
+
+    if (!session) {
+  const effectiveDeviceId = deviceId?.trim() || null;
+
+  if (!effectiveDeviceId) {
+    throw new NotFoundException("Pairing session not found");
+  }
+
+  await this.assertOrganizationHasAvailableScreenSlot(auth.organizationId);
+
+  const existingById = await this.prisma.screen.findUnique({
+    where: { id: effectiveDeviceId },
+    select: {
+      id: true,
+      organizationId: true,
+      workspaceId: true,
+      name: true,
+      runtimeKey: true,
+      isVirtual: true,
+      status: true,
+      orientation: true,
+    },
+  }).catch(() => null);
+
+  let screen:
+    | {
+        id: string;
+        runtimeKey: string;
+        name: string | null;
+        pairedAt: Date | null;
+        isVirtual: boolean;
+        workspaceId: string | null;
+        organizationId: string;
+        status: any;
+      }
+    | null = null;
+
+  if (existingById) {
+    if (existingById.organizationId !== auth.organizationId) {
+      throw new ForbiddenException("Screen belongs to another organization");
+    }
+
+    if (!isOrgAdmin(auth) && existingById.workspaceId !== auth.activeWorkspaceId) {
+      throw new ForbiddenException("Screen is outside active workspace");
+    }
+
+    screen = await this.prisma.screen.update({
+      where: { id: existingById.id },
       data: {
-        name: null,
-        pairingCode,
+        pairedAt: new Date(),
+        isVirtual: false,
+        name: name?.trim() || existingById.name || "Android Player",
+        status: "PAIRED",
+      },
+      select: {
+        id: true,
+        runtimeKey: true,
+        name: true,
+        pairedAt: true,
+        isVirtual: true,
+        workspaceId: true,
+        organizationId: true,
+        status: true,
+      },
+    });
+  } else {
+    screen = await this.prisma.screen.create({
+      data: {
+        id: effectiveDeviceId,
+        name: name?.trim() || "Android Player",
         pairedAt: new Date(),
         lastSeenAt: null,
         assignedPlaylistId: null,
         assignedContentType: null,
         assignedContentId: null,
-        isVirtual: shouldBeVirtual,
+        isVirtual: false,
+        isArchived: false,
+        status: "PAIRED",
+        organizationId: auth.organizationId,
+        workspaceId: auth.activeWorkspaceId,
+        createdByUserId: auth.userId,
+      },
+      select: {
+        id: true,
+        runtimeKey: true,
+        name: true,
+        pairedAt: true,
+        isVirtual: true,
+        workspaceId: true,
+        organizationId: true,
+        status: true,
       },
     });
   }
 
-  // ✅ IMPORTANT FIX: force isVirtual to the computed truth (can become false)
-  return this.prisma.screen.update({
-    where: { id: existing.id },
+  if (!screen) {
+  throw new BadRequestException("Failed to create or update screen");
+}
+
+  await this.prisma.pairingSession.create({
     data: {
-      pairedAt: new Date(),
-      isVirtual: shouldBeVirtual,
+      pairingCode,
+      sessionType: "DEVICE",
+      status: "CLAIMED",
+      organizationId: auth.organizationId,
+      workspaceId: auth.activeWorkspaceId,
+      createdByUserId: auth.userId,
+      claimedByUserId: auth.userId,
+      claimedAt: new Date(),
+      expiresAt: addMinutes(new Date(), 10),
+      screenId: screen.id,
+      deviceId: effectiveDeviceId,
+      metadata: {
+        source: "admin-pair-direct-device-code",
+      },
     },
   });
+
+  return {
+    ...screen,
+    pairingCode: null,
+  };
 }
+
+
+
+if (session.sessionType !== "DEVICE") {
+  if (session.organizationId !== auth.organizationId) {
+    throw new ForbiddenException("Pairing code belongs to another organization");
+  }
+
+  if (!isOrgAdmin(auth) && session.workspaceId !== auth.activeWorkspaceId) {
+    throw new ForbiddenException("Pairing code is outside active workspace");
+  }
+}
+
+    if (session.screenId) {
+      const existingLinked = await this.prisma.screen.findUnique({
+        where: { id: session.screenId },
+        select: {
+          id: true,
+          organizationId: true,
+          workspaceId: true,
+          isVirtual: true,
+          name: true,
+          runtimeKey: true,
+        },
+      });
+
+      if (!existingLinked) {
+        throw new NotFoundException("Linked screen not found");
+      }
+
+      if (existingLinked.organizationId !== auth.organizationId) {
+        throw new ForbiddenException("Screen belongs to another organization");
+      }
+
+      if (!isOrgAdmin(auth) && existingLinked.workspaceId !== auth.activeWorkspaceId) {
+        throw new ForbiddenException("Screen is outside active workspace");
+      }
+
+      const updated = await this.prisma.screen.update({
+        where: { id: existingLinked.id },
+        data: {
+          pairedAt: new Date(),
+          isVirtual: session.sessionType === "VIRTUAL_SCREEN",
+          name: name?.trim() || existingLinked.name,
+          status: "PAIRED",
+        },
+        select: {
+          id: true,
+          runtimeKey: true,
+          name: true,
+          pairedAt: true,
+          isVirtual: true,
+          workspaceId: true,
+          organizationId: true,
+          status: true,
+        },
+      });
+
+      await this.prisma.pairingSession.update({
+        where: { id: session.id },
+        data: {
+          status: "CLAIMED",
+          claimedAt: new Date(),
+          claimedByUserId: auth.userId,
+          organizationId: auth.organizationId,
+          workspaceId: auth.activeWorkspaceId,
+          screenId: updated.id,
+          deviceId: deviceId?.trim() || null,
+        },
+      });
+
+      return {
+        ...updated,
+        pairingCode: null,
+      };
+    }
+
+    await this.assertOrganizationHasAvailableScreenSlot(auth.organizationId);
+
+    if (deviceId && String(deviceId).trim()) {
+      const id = String(deviceId).trim();
+
+      const existingById = await this.prisma.screen.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          organizationId: true,
+          workspaceId: true,
+          name: true,
+          runtimeKey: true,
+        },
+      }).catch(() => null);
+
+      if (existingById) {
+        if (existingById.organizationId !== auth.organizationId) {
+          throw new ForbiddenException("Screen belongs to another organization");
+        }
+
+        if (!isOrgAdmin(auth) && existingById.workspaceId !== auth.activeWorkspaceId) {
+          throw new ForbiddenException("Screen is outside active workspace");
+        }
+
+        const updated = await this.prisma.screen.update({
+          where: { id },
+          data: {
+            pairedAt: new Date(),
+            isVirtual: session.sessionType === "VIRTUAL_SCREEN",
+            name: name?.trim() || existingById.name,
+            status: "PAIRED",
+          },
+          select: {
+            id: true,
+            runtimeKey: true,
+            name: true,
+            pairedAt: true,
+            isVirtual: true,
+            workspaceId: true,
+            organizationId: true,
+            status: true,
+          },
+        });
+
+        await this.prisma.pairingSession.update({
+          where: { id: session.id },
+          data: {
+            status: "CLAIMED",
+            claimedAt: new Date(),
+            claimedByUserId: auth.userId,
+            screenId: updated.id,
+            deviceId: deviceId?.trim() || null,
+          },
+        });
+
+        return {
+          ...updated,
+          pairingCode: null,
+        };
+      }
+
+      const created = await this.prisma.screen.create({
+        data: {
+          id,
+          name: name?.trim() || "Android Player",
+          pairedAt: new Date(),
+          lastSeenAt: null,
+          assignedPlaylistId: null,
+          assignedContentType: null,
+          assignedContentId: null,
+          isVirtual: session.sessionType === "VIRTUAL_SCREEN",
+          isArchived: false,
+          status: "PAIRED",
+          organizationId: auth.organizationId,
+          workspaceId: auth.activeWorkspaceId,
+          createdByUserId: auth.userId,
+        },
+        select: {
+          id: true,
+          runtimeKey: true,
+          name: true,
+          pairedAt: true,
+          isVirtual: true,
+          workspaceId: true,
+          organizationId: true,
+          status: true,
+        },
+      });
+
+      await this.prisma.pairingSession.update({
+        where: { id: session.id },
+        data: {
+          status: "CLAIMED",
+          claimedAt: new Date(),
+          claimedByUserId: auth.userId,
+          screenId: created.id,
+          deviceId: deviceId?.trim() || null,
+        },
+      });
+
+      return {
+        ...created,
+        pairingCode: null,
+      };
+    }
+
+    const created = await this.prisma.screen.create({
+      data: {
+        name: null,
+        pairedAt: new Date(),
+        lastSeenAt: null,
+        assignedPlaylistId: null,
+        assignedContentType: null,
+        assignedContentId: null,
+        isVirtual: session.sessionType === "VIRTUAL_SCREEN",
+        isArchived: false,
+        status: "PAIRED",
+        organizationId: auth.organizationId,
+        workspaceId: auth.activeWorkspaceId,
+        createdByUserId: auth.userId,
+      },
+      select: {
+        id: true,
+        runtimeKey: true,
+        name: true,
+        pairedAt: true,
+        isVirtual: true,
+        workspaceId: true,
+        organizationId: true,
+        status: true,
+      },
+    });
+
+    await this.prisma.pairingSession.update({
+      where: { id: session.id },
+      data: {
+        status: "CLAIMED",
+        claimedAt: new Date(),
+        claimedByUserId: auth.userId,
+        screenId: created.id,
+        deviceId: deviceId?.trim() || null,
+      },
+    });
+
+    return {
+      ...created,
+      pairingCode: null,
+    };
+  }
 
   private async resolveAssignedContentName(type: string | null, id: string | null) {
     if (!type || !id) return null;
 
     if (type === "PLAYLIST") {
-      const pl = await this.prisma.playlist.findUnique({ where: { id }, select: { name: true } });
+      const pl = await this.prisma.playlist.findUnique({
+        where: { id },
+        select: { name: true },
+      });
       return pl?.name ?? null;
     }
 
@@ -584,7 +1488,10 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
     }
 
     if (type === "MEDIA") {
-      const m = await this.prisma.media.findUnique({ where: { id }, select: { name: true, url: true } });
+      const m = await this.prisma.media.findUnique({
+        where: { id },
+        select: { name: true, url: true },
+      });
       if (m?.name) return m.name;
       if (m?.url) return m.url.split("/").pop() ?? m.url;
       return `Media (${id.slice(0, 6)}…)`;
@@ -593,97 +1500,152 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
     return null;
   }
 
-  async renameScreenById(id: string, name: string) {
-    try {
-      return await this.prisma.screen.update({
-        where: { id },
-        data: { name },
-      });
-    } catch (e: any) {
-      if (e?.code === "P2025") throw new NotFoundException("Screen not found");
-      throw e;
-    }
-  }
-
-  async deleteByIdAndReturnCode(screenId: string) {
-    const s = await this.prisma.screen.findUnique({ where: { id: screenId } });
-    if (!s) throw new NotFoundException("Screen not found");
-
-    const code = s.pairingCode;
+  async deleteByIdAndReturnRuntimeKey(auth: AuthContext, screenId: string) {
+    const s = await this.getScopedScreenOrThrow(auth, screenId);
     await this.prisma.screen.delete({ where: { id: screenId } });
-    return code;
+    return s.runtimeKey;
   }
 
-  async getAdminScreenSnapshotById(screenId: string) {
+  async getScreenSnapshotByIdInternal(screenId: string) {
     const s = await this.prisma.screen.findUnique({
       where: { id: screenId },
-      include: { assignedPlaylist: true },
+      include: {
+        assignedPlaylist: true,
+        pairingSessions: {
+          where: {
+            sessionType: "VIRTUAL_SCREEN",
+            status: "OPEN",
+          },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            pairingCode: true,
+          },
+        },
+      },
     });
+
     if (!s) return null;
 
     const assignedContentType =
       (s.assignedContentType as any) ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
 
-    const assignedContentId = (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
+    const assignedContentId =
+      (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
 
-    const assignedContentName = await this.resolveAssignedContentName(assignedContentType, assignedContentId);
+    const assignedContentName = await this.resolveAssignedContentName(
+      assignedContentType,
+      assignedContentId,
+    );
 
-    const virtualSessionId = s.isVirtual ? this.ensureVirtualSessionForCode(s.pairingCode) : null;
+    const latestOpenVirtual = s.pairingSessions?.[0] ?? null;
 
     return {
       id: s.id,
       name: s.name,
-      pairingCode: s.pairingCode,
+      runtimeKey: s.runtimeKey,
       pairedAt: s.pairedAt ? s.pairedAt.toISOString() : null,
       lastSeenAt: s.lastSeenAt ? s.lastSeenAt.toISOString() : null,
       isVirtual: !!s.isVirtual,
-
       assignedPlaylistId: s.assignedPlaylistId ?? null,
       assignedPlaylistName: s.assignedPlaylist?.name ?? null,
-
       assignedContentType,
       assignedContentId,
       assignedContentName,
-
-      virtualSessionId,
+      virtualSessionId: latestOpenVirtual?.id ?? null,
+      activePairingCode: latestOpenVirtual?.pairingCode ?? null,
       orientation: (s as any).orientation ?? "LANDSCAPE",
+      status: (s as any).status ?? "PENDING",
     };
   }
 
-  /**
-   * ✅ Generic content assignment
-   */
-  async assignContent(screenId: string, type: "PLAYLIST" | "CHANNEL" | "MEDIA", contentId: string) {
-    const s = await this.prisma.screen.findUnique({ where: { id: screenId } });
-    if (!s) throw new NotFoundException("Screen not found");
+  async getAdminScreenSnapshotById(auth: AuthContext, screenId: string) {
+    const s = await this.prisma.screen.findUnique({
+      where: { id: screenId },
+      select: {
+        id: true,
+        organizationId: true,
+        workspaceId: true,
+      },
+    });
+
+    if (!s || s.organizationId !== auth.organizationId) return null;
+
+    if (!isOrgAdmin(auth) && s.workspaceId !== auth.activeWorkspaceId) {
+      throw new ForbiddenException("Screen is outside active workspace");
+    }
+
+    return this.getScreenSnapshotByIdInternal(screenId);
+  }
+
+  async assignContent(
+    auth: AuthContext,
+    screenId: string,
+    type: "PLAYLIST" | "CHANNEL" | "MEDIA",
+    contentId: string,
+  ) {
+    const s = await this.getScopedScreenOrThrow(auth, screenId);
 
     if (type === "PLAYLIST") {
-      const pl = await this.prisma.playlist.findUnique({ where: { id: contentId }, select: { id: true } });
-      if (!pl) throw new NotFoundException("Playlist not found");
+      const pl = await this.prisma.playlist.findUnique({
+        where: { id: contentId },
+        select: { id: true, organizationId: true, workspaceId: true, isArchived: true },
+      });
+
+      if (!pl || pl.organizationId !== auth.organizationId || pl.isArchived) {
+        throw new NotFoundException("Playlist not found");
+      }
+
+      if (!isOrgAdmin(auth) && pl.workspaceId !== auth.activeWorkspaceId) {
+        throw new ForbiddenException("Playlist is outside active workspace");
+      }
     } else if (type === "MEDIA") {
-      const m = await this.prisma.media.findUnique({ where: { id: contentId }, select: { id: true } });
-      if (!m) throw new NotFoundException("Media not found");
+      const m = await this.prisma.media.findUnique({
+        where: { id: contentId },
+        select: {
+          id: true,
+          organizationId: true,
+          workspaceId: true,
+          visibilityScope: true,
+        },
+      });
+
+      if (!m || m.organizationId !== auth.organizationId) {
+        throw new NotFoundException("Media not found");
+      }
+
+      if (
+        !isOrgAdmin(auth) &&
+        !(
+          m.visibilityScope === "GLOBAL" ||
+          (m.visibilityScope === "WORKSPACE" && m.workspaceId === auth.activeWorkspaceId)
+        )
+      ) {
+        throw new ForbiddenException("Media is not accessible in active workspace");
+      }
     } else if (type === "CHANNEL") {
-  const screen = await this.prisma.screen.findUnique({
-    where: { id: screenId },
-    select: { orientation: true },
-  });
-  if (!screen) throw new NotFoundException("Screen not found");
+      const ch = await this.prisma.channel.findUnique({
+        where: { id: contentId },
+        select: { id: true, orientation: true, organizationId: true, workspaceId: true, isArchived: true },
+      });
 
-  const ch = await this.prisma.channel.findUnique({
-    where: { id: contentId },
-    select: { id: true, orientation: true },
-  });
-  if (!ch) throw new NotFoundException("Channel not found");
+      if (!ch || ch.organizationId !== auth.organizationId || ch.isArchived) {
+        throw new NotFoundException("Channel not found");
+      }
 
-  const so = screenBaseOrientation(screen.orientation);
-  const co = String(ch.orientation ?? "landscape"); // prisma enum: landscape|portrait
-  if (so !== co) {
-    throw new BadRequestException(
-      `Channel orientation (${co}) does not match screen orientation (${so}).`
-    );
-  }
-}
+      if (!isOrgAdmin(auth) && ch.workspaceId !== auth.activeWorkspaceId) {
+        throw new ForbiddenException("Channel is outside active workspace");
+      }
+
+      const so = screenBaseOrientation(s.orientation);
+      const co = String(ch.orientation ?? "landscape");
+      if (so !== co) {
+        throw new BadRequestException(
+          `Channel orientation (${co}) does not match screen orientation (${so}).`,
+        );
+      }
+    }
 
     const nextAssignedPlaylistId = type === "PLAYLIST" ? contentId : null;
 
@@ -694,44 +1656,55 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         assignedContentId: contentId,
         assignedPlaylistId: nextAssignedPlaylistId,
       },
-      include: { assignedPlaylist: true },
+      include: {
+        assignedPlaylist: true,
+        pairingSessions: {
+          where: {
+            sessionType: "VIRTUAL_SCREEN",
+            status: "OPEN",
+          },
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            pairingCode: true,
+          },
+        },
+      },
     });
 
     const assignedContentName = await this.resolveAssignedContentName(
       updated.assignedContentType as any,
-      updated.assignedContentId as any
+      updated.assignedContentId as any,
     );
 
-    const virtualSessionId = updated.isVirtual ? this.ensureVirtualSessionForCode(updated.pairingCode) : null;
+    const latestOpenVirtual = updated.pairingSessions?.[0] ?? null;
 
     return {
       id: updated.id,
       name: updated.name,
-      pairingCode: updated.pairingCode,
+      runtimeKey: updated.runtimeKey,
       pairedAt: updated.pairedAt ? updated.pairedAt.toISOString() : null,
       lastSeenAt: updated.lastSeenAt ? updated.lastSeenAt.toISOString() : null,
       isVirtual: !!updated.isVirtual,
-
       assignedPlaylistId: updated.assignedPlaylistId ?? null,
       assignedPlaylistName: updated.assignedPlaylist?.name ?? null,
-
       assignedContentType: (updated.assignedContentType as any) ?? null,
       assignedContentId: (updated.assignedContentId as any) ?? null,
       assignedContentName,
-
-      virtualSessionId,
+      virtualSessionId: latestOpenVirtual?.id ?? null,
+      activePairingCode: latestOpenVirtual?.pairingCode ?? null,
+      orientation: (updated as any).orientation ?? "LANDSCAPE",
+      status: (updated as any).status ?? "PENDING",
     };
   }
 
-  /**
-   * ✅ Virtual Screen state payload with STABLE updatedAt (from Screen.updatedAt ONLY)
-   */
-  async getVirtualScreenStatePayload(rawCode: string): Promise<VsStatePayload> {
-    const code = this.normCode(rawCode);
+  async getVirtualScreenStatePayloadByRuntimeKey(rawRuntimeKey: string): Promise<VsStatePayload> {
+    const runtimeKey = this.normRuntimeKey(rawRuntimeKey);
 
-    if (!code) {
+    if (!runtimeKey) {
       return {
-        code: "",
+        runtimeKey: "",
         state: "PAIR",
         updatedAt: 0,
         playlistAssigned: false,
@@ -742,8 +1715,8 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
       };
     }
 
-    const s = await this.prisma.screen.findFirst({
-      where: { pairingCode: code },
+    const s = await this.prisma.screen.findUnique({
+      where: { runtimeKey },
       select: {
         id: true,
         updatedAt: true,
@@ -757,7 +1730,7 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
 
     if (!s) {
       return {
-        code,
+        runtimeKey,
         state: "PAIR",
         updatedAt: 0,
         playlistAssigned: false,
@@ -769,12 +1742,11 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
     }
 
     const updatedAtMs = s.updatedAt ? new Date(s.updatedAt as any).getTime() : 0;
-
     const hasAssigned = !!(s.assignedContentType && s.assignedContentId) || !!s.assignedPlaylistId;
 
     if (!hasAssigned) {
       return {
-        code,
+        runtimeKey,
         state: "WAITING",
         updatedAt: updatedAtMs,
         playlistAssigned: false,
@@ -786,7 +1758,7 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
     }
 
     return {
-      code,
+      runtimeKey,
       state: "PLAYING",
       updatedAt: updatedAtMs,
       playlistAssigned: true,
@@ -797,29 +1769,41 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
     };
   }
 
-  /**
-   * ✅ Virtual Screen playlist payload
-   * - MEDIA => single item
-   * - CHANNEL => ALL zones from Channel.zones JSON (z1, z2, ...)
-   * - PLAYLIST => legacy playlist items
-   * ✅ updatedAt is MERGED for CHANNEL: max(screen.updatedAt, channel.updatedAt)
-   */
-  async getVirtualScreenPlaylistPayload(rawCode: string): Promise<VsPlaylistPayload> {
-    const code = this.normCode(rawCode);
+  async getVirtualScreenPlaylistPayloadByRuntimeKey(rawRuntimeKey: string): Promise<VsPlaylistPayload> {
+    const runtimeKey = this.normRuntimeKey(rawRuntimeKey);
 
-    if (!code) return { code: "", playlistId: null, updatedAt: 0, items: [] };
+    if (!runtimeKey) return { runtimeKey: "", playlistId: null, updatedAt: 0, items: [] };
 
-    const s = await this.prisma.screen.findFirst({
-      where: { pairingCode: code },
+    const s = await this.prisma.screen.findUnique({
+      where: { runtimeKey },
       select: {
+        id: true,
         updatedAt: true,
         assignedPlaylistId: true,
         assignedContentType: true,
         assignedContentId: true,
+        timezone: true,
+        workspace: {
+          select: {
+            timezone: true,
+            organization: {
+              select: {
+                timezone: true,
+              },
+            },
+          },
+        },
       },
     });
 
-    if (!s) return { code, playlistId: null, updatedAt: 0, items: [] };
+    if (!s) return { runtimeKey, playlistId: null, updatedAt: 0, items: [] };
+
+    const effectiveTimezone = safeTimezone(
+      s.timezone,
+      s.workspace?.timezone,
+      s.workspace?.organization?.timezone,
+      "UTC",
+    );
 
     const updatedAtMs = s.updatedAt ? new Date(s.updatedAt as any).getTime() : 0;
 
@@ -830,52 +1814,51 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
       ct ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
     const effectiveId: string | null = cid ?? s.assignedPlaylistId ?? null;
 
-    // -------------------------
-    // 1) MEDIA => single item
-    // -------------------------
     if (effectiveType === "MEDIA" && effectiveId) {
       const m = await this.prisma.media.findUnique({
         where: { id: effectiveId },
         select: { id: true, url: true, type: true, durationMs: true },
       });
 
-      if (!m?.url) return { code, playlistId: null, updatedAt: updatedAtMs, items: [] };
+      if (!m?.url) return { runtimeKey, playlistId: null, updatedAt: updatedAtMs, items: [] };
 
       const type = normalizeMediaType(m.type);
-      const durationMs = computeDurationMs({ type, media: m }); // video => usually undefined unless explicit
+      const durationMs = computeDurationMs({ type, media: m });
 
       return {
-        code,
+        runtimeKey,
         playlistId: null,
         updatedAt: updatedAtMs,
         items: [{ id: String(m.id), type, url: String(m.url), order: 0, durationMs }],
       };
     }
 
-    // -------------------------
-    // 2) CHANNEL => ALL ZONES (schedule filtering on JSON items)
-    // -------------------------
     if (effectiveType === "CHANNEL" && effectiveId) {
       const channelId = effectiveId;
 
       const ch = await this.prisma.channel
         .findUnique({
           where: { id: channelId },
-          select: { id: true, zones: true, layoutId: true, transition: true, updatedAt: true, orientation: true },
+          select: {
+            id: true,
+            zones: true,
+            layoutId: true,
+            transition: true,
+            updatedAt: true,
+            orientation: true,
+          },
         })
         .catch(() => null);
 
-      if (!ch) return { code, playlistId: null, updatedAt: updatedAtMs, items: [] };
+      if (!ch) return { runtimeKey, playlistId: null, updatedAt: updatedAtMs, items: [] };
 
       const chUpdatedAtMs = ch.updatedAt ? new Date(ch.updatedAt as any).getTime() : 0;
       const mergedUpdatedAtMs = Math.max(updatedAtMs, chUpdatedAtMs);
 
       const zonesJson = ((ch.zones as any) ?? {}) as Record<string, any[]>;
-
       const zoneIdsFromJson = Object.keys(zonesJson).filter((k) => Array.isArray(zonesJson[k]));
       const zoneIds = zoneIdsFromJson.length ? zoneIdsFromJson : ["z1"];
 
-      // Collect referenced media ids from JSON
       const jsonMediaIds: string[] = [];
       for (const zid of zoneIds) {
         const arr = Array.isArray(zonesJson?.[zid]) ? zonesJson[zid] : [];
@@ -885,7 +1868,6 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         }
       }
 
-      // Load DB zone items (fallback per zone)
       const zoneItems = await this.prisma.channelZoneItem.findMany({
         where: { channelId: channelId as any },
         orderBy: [{ zoneId: "asc" as any }, { order: "asc" }],
@@ -896,6 +1878,8 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
           sourceId: true,
           order: true,
           durationSec: true,
+          schedule: true,
+          schedules: true,
         },
       });
 
@@ -913,7 +1897,6 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         : [];
 
       const mediaById = new Map(mediaRows.map((m) => [String(m.id), m]));
-
       const zones: Record<string, VsPlaylistItem[]> = {};
       const now = new Date();
 
@@ -923,10 +1906,40 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         url: string;
         order: number;
         durationMs?: number;
+        schedule?: ZoneItemSchedule | null;
+        schedules?: ZoneItemSchedule[];
+        transitionType?: string;
+        transitionMs?: number;
       }) => {
         if (!args.url) return null;
-        const it: VsPlaylistItem = { id: args.id, type: args.type, url: args.url, order: args.order };
-        if (typeof args.durationMs === "number" && Number.isFinite(args.durationMs)) it.durationMs = args.durationMs;
+
+        const it: VsPlaylistItem = {
+          id: args.id,
+          type: args.type,
+          url: args.url,
+          order: args.order,
+        };
+
+        if (typeof args.durationMs === "number" && Number.isFinite(args.durationMs)) {
+          it.durationMs = args.durationMs;
+        }
+
+        if (args.schedule) {
+          it.schedule = args.schedule;
+        }
+
+        if (Array.isArray(args.schedules) && args.schedules.length) {
+          it.schedules = args.schedules;
+        }
+
+        if (args.transitionType) {
+          it.transitionType = String(args.transitionType);
+        }
+
+        if (typeof args.transitionMs === "number" && Number.isFinite(args.transitionMs)) {
+          it.transitionMs = args.transitionMs;
+        }
+
         return it;
       };
 
@@ -934,18 +1947,21 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         const arr = Array.isArray(zonesJson?.[zid]) ? zonesJson[zid] : [];
         const built: VsPlaylistItem[] = [];
 
-        // A) Prefer JSON (with schedule filter)
         for (let idx = 0; idx < arr.length; idx++) {
           const z = arr[idx];
 
           const schedules = ensureSchedulesFromItem(z);
-          if (schedules.length && !schedules.some((sch) => sch && isScheduleActive(sch, now))) continue;
+          if (
+            schedules.length &&
+            !schedules.some((sch) => sch && isScheduleActive(sch, now, effectiveTimezone))
+          ) {
+            continue;
+          }
 
           const directUrl = String(z?.url ?? "");
           const directTypeRaw = z?.type ?? z?.mediaType ?? "";
           const order = Number(z?.order ?? idx);
 
-          // A1) JSON provides url directly
           if (directUrl) {
             const t = normalizeMediaType(directTypeRaw);
             const durationMs = computeDurationMs({ type: t, json: z });
@@ -956,12 +1972,21 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
               url: directUrl,
               order,
               durationMs,
+              schedule: z?.schedule ?? null,
+              schedules: Array.isArray(z?.schedules) ? z.schedules : undefined,
+              transitionType: z?.transitionType ?? z?.transition ?? undefined,
+              transitionMs:
+                z?.transitionMs != null
+                  ? Number(z.transitionMs)
+                  : z?.transitionDurationMs != null
+                    ? Number(z.transitionDurationMs)
+                    : undefined,
             });
+
             if (it) built.push(it);
             continue;
           }
 
-          // A2) JSON references MEDIA by id
           const st = String(z?.sourceType ?? "").toUpperCase();
           if (st !== "MEDIA" || !z?.sourceId) continue;
 
@@ -977,13 +2002,23 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
             url: String(m.url),
             order,
             durationMs,
+            schedule: z?.schedule ?? null,
+            schedules: Array.isArray(z?.schedules) ? z.schedules : undefined,
+            transitionType: z?.transitionType ?? z?.transition ?? undefined,
+            transitionMs:
+              z?.transitionMs != null
+                ? Number(z.transitionMs)
+                : z?.transitionDurationMs != null
+                  ? Number(z.transitionDurationMs)
+                  : undefined,
           });
+
           if (it) built.push(it);
         }
 
-        // B) Fallback to DB zone items
         if (built.length === 0) {
           const zis = zoneItems.filter((x) => String(x.zoneId ?? "") === zid);
+
           for (let idx = 0; idx < zis.length; idx++) {
             const z = zis[idx];
             const st = String(z.sourceType ?? "").toUpperCase();
@@ -994,6 +2029,14 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
 
             const t = normalizeMediaType(m.type);
             const order2 = Number(z.order ?? idx);
+
+            const dbSchedules = ensureSchedulesFromItem(z);
+            if (
+              dbSchedules.length &&
+              !dbSchedules.some((sch) => sch && isScheduleActive(sch, now, effectiveTimezone))
+            ) {
+              continue;
+            }
 
             const durationMs = computeDurationMs({
               type: t,
@@ -1007,7 +2050,10 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
               url: String(m.url),
               order: order2,
               durationMs,
+              schedule: (z.schedule as any) ?? null,
+              schedules: Array.isArray(z.schedules) ? (z.schedules as any) : undefined,
             });
+
             if (it) built.push(it);
           }
         }
@@ -1016,27 +2062,23 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         zones[zid] = built;
       }
 
-      // Backward compat: "items" == z1
       const items = zones["z1"] ?? [];
 
       return {
-        code,
+        runtimeKey,
         playlistId: null,
-        updatedAt: mergedUpdatedAtMs, // ✅ FIXED (use merged)
+        updatedAt: mergedUpdatedAtMs,
         items,
         channel: {
           channelId,
           layoutId: (ch.layoutId as any) ?? null,
           zones,
-          transition: (ch.transition as any) ?? null, // ✅ includes UI transition config
+          transition: (ch.transition as any) ?? null,
           orientation: ch.orientation ?? "landscape",
         },
       };
     }
 
-    // -------------------------
-    // 3) PLAYLIST (legacy + generic)
-    // -------------------------
     if (effectiveType === "PLAYLIST" && effectiveId) {
       const playlistId = effectiveId;
 
@@ -1045,7 +2087,7 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         include: { items: { include: { media: true } } },
       });
 
-      if (!pl) return { code, playlistId, updatedAt: updatedAtMs, items: [] };
+      if (!pl) return { runtimeKey, playlistId, updatedAt: updatedAtMs, items: [] };
 
       const now = new Date();
 
@@ -1055,7 +2097,7 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
         .filter((it: any) => {
           const schedules = ensureSchedulesFromItem(it);
           if (!schedules.length) return true;
-          return schedules.some((sch) => sch && isScheduleActive(sch, now));
+          return schedules.some((sch) => sch && isScheduleActive(sch, now, effectiveTimezone));
         })
         .map((it: any) => {
           const type = normalizeMediaType(it.media?.type);
@@ -1067,13 +2109,141 @@ async pairByCodeUpsert(rawCode: string, deviceId?: string, name?: string) {
               ? it.duration
               : computeDurationMs({ type, media: it.media });
 
-          return { id: String(it.id ?? `${order}`), type, url, order, durationMs };
+          const mapped: VsPlaylistItem = { id: String(it.id ?? `${order}`), type, url, order, durationMs };
+
+          if (it.schedule) mapped.schedule = it.schedule;
+          if (Array.isArray(it.schedules) && it.schedules.length) mapped.schedules = it.schedules;
+
+          return mapped;
         })
         .filter((x) => !!x.url);
 
-      return { code, playlistId, updatedAt: updatedAtMs, items };
+      return { runtimeKey, playlistId, updatedAt: updatedAtMs, items };
     }
 
-    return { code, playlistId: null, updatedAt: updatedAtMs, items: [] };
+    return { runtimeKey, playlistId: null, updatedAt: updatedAtMs, items: [] };
   }
+
+ async unpairScreen(auth: AuthContext, screenId: string) {
+  const screen = await this.getScopedScreenOrThrow(auth, screenId);
+
+  const now = new Date();
+  const expiresAt = addMinutes(now, 10);
+
+  await this.prisma.pairingSession.updateMany({
+    where: {
+      screenId: screen.id,
+      status: { in: ["OPEN", "CLAIMED"] },
+    },
+    data: {
+      status: "CANCELLED",
+      cancelledAt: now,
+      cancelReason: "manual-unpair",
+    },
+  });
+
+  const updatedScreen = await this.prisma.screen.update({
+    where: { id: screen.id },
+    data: {
+      pairedAt: null,
+      lastSeenAt: null,
+      status: "PENDING",
+      assignedPlaylistId: null,
+      assignedContentType: null,
+      assignedContentId: null,
+      runtimeKey: crypto.randomUUID(),
+    },
+    select: {
+      id: true,
+      name: true,
+      runtimeKey: true,
+      pairedAt: true,
+      lastSeenAt: true,
+      isVirtual: true,
+      assignedPlaylistId: true,
+      assignedContentType: true,
+      assignedContentId: true,
+      orientation: true,
+      status: true,
+    },
+  });
+
+  const sessionType = updatedScreen.isVirtual ? "VIRTUAL_SCREEN" : "DEVICE";
+
+  let pairingCode: string | null = null;
+
+  const latestSession = await this.prisma.pairingSession.findFirst({
+    where: {
+      screenId: screen.id,
+      sessionType,
+    },
+    orderBy: { updatedAt: "desc" },
+    select: {
+      id: true,
+      pairingCode: true,
+    },
+  });
+
+  if (latestSession?.pairingCode) {
+    pairingCode = latestSession.pairingCode;
+  } else {
+    pairingCode = await this.generateUniquePairingCode();
+  }
+
+  await this.prisma.pairingSession.upsert({
+    where: { pairingCode },
+    update: {
+      sessionType,
+      status: "OPEN",
+      organizationId: updatedScreen.isVirtual ? auth.organizationId : null,
+      workspaceId: updatedScreen.isVirtual ? auth.activeWorkspaceId : null,
+      createdByUserId: updatedScreen.isVirtual ? auth.userId : null,
+      claimedByUserId: null,
+      claimedAt: null,
+      cancelledAt: null,
+      cancelReason: null,
+      screenId: screen.id,
+      deviceId: updatedScreen.isVirtual ? null : screen.id,
+      expiresAt,
+      metadata: {
+        source: updatedScreen.isVirtual
+          ? "manual-unpair-reopen-virtual"
+          : "manual-unpair-reopen-device",
+        screenId: screen.id,
+        deviceId: updatedScreen.isVirtual ? null : screen.id,
+        name: updatedScreen.name ?? (updatedScreen.isVirtual ? "Virtual Screen" : "Android Player"),
+        reopenedAt: now.toISOString(),
+      },
+    },
+    create: {
+      pairingCode,
+      sessionType,
+      status: "OPEN",
+      organizationId: updatedScreen.isVirtual ? auth.organizationId : null,
+      workspaceId: updatedScreen.isVirtual ? auth.activeWorkspaceId : null,
+      createdByUserId: updatedScreen.isVirtual ? auth.userId : null,
+      claimedByUserId: null,
+      claimedAt: null,
+      cancelledAt: null,
+      cancelReason: null,
+      screenId: screen.id,
+      deviceId: updatedScreen.isVirtual ? null : screen.id,
+      expiresAt,
+      metadata: {
+        source: updatedScreen.isVirtual
+          ? "manual-unpair-reopen-virtual"
+          : "manual-unpair-reopen-device",
+        screenId: screen.id,
+        deviceId: updatedScreen.isVirtual ? null : screen.id,
+        name: updatedScreen.name ?? (updatedScreen.isVirtual ? "Virtual Screen" : "Android Player"),
+        reopenedAt: now.toISOString(),
+      },
+    },
+    select: {
+      pairingCode: true,
+    },
+  });
+
+  return this.getScreenSnapshotByIdInternal(screen.id);
+}
 }

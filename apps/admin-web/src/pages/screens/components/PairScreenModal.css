@@ -1,106 +1,182 @@
 .psm-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.45);
+  z-index: 1200;
+  background: rgba(7, 20, 38, 0.52);
   backdrop-filter: blur(6px);
-  display: grid;
-  place-items: center;
-  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
 }
 
 .psm-modal {
-  width: min(560px, 92vw);
-  background: #fff;
-  border-radius: 16px;
-  border: 1px solid #e5e7eb;
-  box-shadow: 0 30px 120px rgba(0,0,0,0.25);
-  padding: 18px 18px 16px;
+  width: min(560px, 100%);
+  background: #ffffff;
+  border-radius: 18px;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
 }
 
 .psm-head {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  align-items: flex-start;
-  margin-bottom: 14px;
+  padding: 24px 24px 18px;
+  border-bottom: 1px solid rgba(10, 35, 66, 0.08);
 }
 
 .psm-title {
-  font-size: 18px;
-  font-weight: 900;
-  color: #0f172a;
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.2;
+  font-weight: 800;
+  color: var(--brand-text-main);
 }
 
 .psm-sub {
-  margin-top: 4px;
-  font-size: 13px;
-  color: #64748b;
+  margin-top: 6px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--brand-text-sub);
 }
 
 .psm-x {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  border: 1px solid #e5e7eb;
-  background: #fff;
+  border: 0;
+  background: transparent;
+  color: var(--brand-text-main);
+  font-size: 30px;
+  line-height: 1;
   cursor: pointer;
-  font-size: 22px;
-  line-height: 0;
-  color: #0f172a;
+  padding: 0 4px;
+}
+
+.psm-x:hover {
+  opacity: 0.7;
 }
 
 .psm-input {
-  width: 100%;
-  border-radius: 12px;
-  border: 1px solid #e5e7eb;
-  padding: 14px 14px;
-  font-size: 16px;
+  width: calc(100% - 48px);
+  margin: 22px 24px 10px;
+  height: 56px;
+  border-radius: 14px;
+  border: 1px solid rgba(10, 35, 66, 0.14);
+  background: #f8fbff;
+  color: var(--brand-text-main);
+  padding: 0 18px;
+  font-size: 24px;
   font-weight: 800;
-  letter-spacing: 2px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
   outline: none;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
 }
 
 .psm-input:focus {
-  border-color: #94a3b8;
-  box-shadow: 0 0 0 4px rgba(148,163,184,0.25);
+  border-color: var(--brand-primary);
+  box-shadow: 0 0 0 3px rgba(29, 161, 242, 0.16);
+  background: #ffffff;
+}
+
+.psm-input::placeholder {
+  color: #9ab3c9;
+  letter-spacing: 0.18em;
 }
 
 .psm-error {
-  margin-top: 10px;
+  margin: 4px 24px 0;
   font-size: 13px;
-  color: #b91c1c;
+  color: #dc2626;
 }
 
 .psm-actions {
-  margin-top: 14px;
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
+  gap: 12px;
+  padding: 22px 24px 24px;
 }
 
 .psm-btn {
+  min-width: 132px;
+  height: 44px;
+  padding: 0 18px;
   border-radius: 12px;
-  padding: 10px 14px;
+  font-size: 14px;
   font-weight: 800;
-  border: 1px solid transparent;
   cursor: pointer;
+  transition:
+    background 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    opacity 0.18s ease,
+    transform 0.08s ease,
+    box-shadow 0.18s ease;
+}
+
+.psm-btn:active:not(:disabled) {
+  transform: translateY(1px);
 }
 
 .psm-btn:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .psm-btn-ghost {
-  background: #fff;
-  border-color: #e5e7eb;
-  color: #0f172a;
+  border: 1px solid rgba(10, 35, 66, 0.14);
+  background: #ffffff;
+  color: var(--brand-text-main);
+}
+
+.psm-btn-ghost:hover:not(:disabled) {
+  background: #f8fbff;
+  border-color: rgba(10, 35, 66, 0.22);
 }
 
 .psm-btn-primary {
-  
-  color: #111827;
+  border: 1px solid var(--brand-primary);
   background: var(--brand-primary);
-border-color: var(--brand-primary);
+  color: #ffffff;
+  box-shadow: 0 12px 28px rgba(29, 161, 242, 0.22);
 }
 
+.psm-btn-primary:hover:not(:disabled) {
+  background: var(--brand-primary-dark);
+  border-color: var(--brand-primary-dark);
+}
+
+@media (max-width: 640px) {
+  .psm-backdrop {
+    padding: 14px;
+  }
+
+  .psm-modal {
+    width: 100%;
+  }
+
+  .psm-head {
+    padding: 18px 18px 14px;
+  }
+
+  .psm-title {
+    font-size: 21px;
+  }
+
+  .psm-input {
+    width: calc(100% - 36px);
+    margin: 18px 18px 8px;
+    font-size: 20px;
+    letter-spacing: 0.12em;
+  }
+
+  .psm-actions {
+    padding: 18px;
+    flex-direction: column;
+  }
+
+  .psm-btn {
+    width: 100%;
+  }
+}

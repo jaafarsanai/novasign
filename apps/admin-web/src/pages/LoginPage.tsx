@@ -1,174 +1,246 @@
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { brand } from "../config/brand";
 import "./LoginPage.css";
 
-const DUMMY_EMAIL = brand.loginDemoEmail;
-const DUMMY_PASSWORD = brand.loginDemoPassword;
+type Mode = "login" | "signup";
 
-const LoginPage: React.FC = () => {
+function setAccessTokenCookie(token: string) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `pp_access_token=${encodeURIComponent(token)}; Path=/; SameSite=Lax${secure}`;
+}
+
+export default function LoginPage() {
   const navigate = useNavigate();
-
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [mode, setMode] = useState<Mode>("login");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+
+  const [fullName, setFullName] = useState("");
+  const [organizationName, setOrganizationName] = useState("");
+  const [workspaceName, setWorkspaceName] = useState("");
+  const [signupEmail, setSignupEmail] = useState("");
+  const [signupPassword, setSignupPassword] = useState("");
+
+  const title = useMemo(
+    () => (mode === "login" ? `Log in to ${brand.appName}` : `Start your 7-day trial`),
+    [mode],
+  );
+
+  async function submitLogin(e: React.FormEvent) {
     e.preventDefault();
+    setBusy(true);
     setError(null);
-    setIsSubmitting(true);
 
-    setTimeout(() => {
-      if (email === DUMMY_EMAIL && password === DUMMY_PASSWORD) {
-        navigate("/screens");
-      } else {
-        setError(`Invalid credentials. Try ${DUMMY_EMAIL} / ${DUMMY_PASSWORD}.`);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: loginEmail,
+          password: loginPassword,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data?.message || "Login failed");
       }
-      setIsSubmitting(false);
-    }, 500);
-  };
 
-  const handleSocialClick = (provider: string) => {
-    console.log(`SSO with ${provider} not implemented yet.`);
-  };
+      if (!data?.accessToken || typeof data.accessToken !== "string") {
+        throw new Error("Login succeeded but no access token was returned");
+      }
+
+      setAccessTokenCookie(data.accessToken);
+      navigate("/screens", { replace: true });
+    } catch (err: any) {
+      setError(err?.message || "Login failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitSignup(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+
+    try {
+      const browserTimezone =
+        Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
+      const res = await fetch("/api/auth/signup", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName,
+          organizationName,
+          workspaceName,
+          email: signupEmail,
+          password: signupPassword,
+          timezone: browserTimezone,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        throw new Error(data?.message || "Signup failed");
+      }
+
+      if (!data?.accessToken || typeof data.accessToken !== "string") {
+        throw new Error("Signup succeeded but no access token was returned");
+      }
+
+      setAccessTokenCookie(data.accessToken);
+      navigate("/screens", { replace: true });
+    } catch (err: any) {
+      setError(err?.message || "Signup failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
-    <div className="login-page">
-      <div className="login-page-gradient" />
+    <div className="pp-login-page">
+      <div className="pp-login-card">
+        <div className="pp-login-brand">
+          <img src={brand.logoFull} alt={brand.appName} className="pp-login-logo" />
+        </div>
 
-      <div className="login-page-content">
-        <div className="login-card">
-          <div className="login-logo-row">
-            <div className="login-logo-icon">
-              <img src={brand.logoIcon} alt={brand.appName} className="login-logo-image" />
-            </div>
-            <div className="login-logo-text">
-              <span className="login-logo-title">{brand.appName}</span>
-              <span className="login-logo-subtitle">{brand.studioName}</span>
-            </div>
-          </div>
+        <h1 className="pp-login-title">{title}</h1>
 
-          <h1 className="login-title">Log into {brand.studioName}</h1>
-          <p className="login-subtext">
-            Don&apos;t have an account? <a href="#">Sign up</a>
-          </p>
-
-          <div className="login-social-buttons">
-            <button
-              type="button"
-              className="login-social-button login-social-google"
-              onClick={() => handleSocialClick("Google")}
-            >
-              <span className="login-social-icon login-social-icon-google">G</span>
-              <span>Continue with Google</span>
-            </button>
-            <button
-              type="button"
-              className="login-social-button login-social-microsoft"
-              onClick={() => handleSocialClick("Microsoft")}
-            >
-              <span className="login-social-icon login-social-icon-microsoft">M</span>
-              <span>Continue with Microsoft</span>
-            </button>
-            <button
-              type="button"
-              className="login-social-button login-social-linkedin"
-              onClick={() => handleSocialClick("LinkedIn")}
-            >
-              <span className="login-social-icon login-social-icon-linkedin">in</span>
-              <span>Continue with LinkedIn</span>
+        {mode === "login" ? (
+          <div className="pp-login-subtitle">
+            Don&apos;t have an account?{" "}
+            <button type="button" className="pp-login-link" onClick={() => setMode("signup")}>
+              Sign up
             </button>
           </div>
-
-          <div className="login-divider">
-            <span className="login-divider-line" />
-            <span className="login-divider-text">or</span>
-            <span className="login-divider-line" />
-          </div>
-
-          <form className="login-form" onSubmit={handleSubmit}>
-            <label className="login-field">
-              <span className="login-field-label">Email</span>
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-              />
-            </label>
-
-            <label className="login-field">
-              <span className="login-field-label">Password</span>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-              />
-            </label>
-
-            {error && <div className="login-error">{error}</div>}
-
-            <button
-              type="submit"
-              className="login-submit-button"
-              disabled={isSubmitting}
-            >
-              {isSubmitting ? "Signing in…" : "Continue with email"}
+        ) : (
+          <div className="pp-login-subtitle">
+            Already have an account?{" "}
+            <button type="button" className="pp-login-link" onClick={() => setMode("login")}>
+              Log in
             </button>
-          </form>
+          </div>
+        )}
 
-          <button
-            type="button"
-            className="login-sso-button"
-            onClick={() => handleSocialClick("SSO")}
-          >
-            Continue with SSO
+        <div className="pp-login-oauth">
+          <button type="button" className="pp-oauth-btn" disabled title="Phase 2">
+            <span className="pp-oauth-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  fill="#EA4335"
+                  d="M12 10.2v3.9h5.5c-.2 1.3-1.5 3.9-5.5 3.9-3.3 0-6-2.8-6-6.2s2.7-6.2 6-6.2c1.9 0 3.2.8 3.9 1.5l2.7-2.6C16.9 2.8 14.7 2 12 2 6.5 2 2 6.5 2 12s4.5 10 10 10c5.8 0 9.6-4.1 9.6-9.8 0-.7-.1-1.3-.2-2H12z"
+                />
+              </svg>
+            </span>
+            <span>Continue with Google</span>
+          </button>
+
+          <button type="button" className="pp-oauth-btn" disabled title="Phase 2">
+            <span className="pp-oauth-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path fill="#F25022" d="M2 2h9.5v9.5H2z" />
+                <path fill="#7FBA00" d="M12.5 2H22v9.5h-9.5z" />
+                <path fill="#00A4EF" d="M2 12.5h9.5V22H2z" />
+                <path fill="#FFB900" d="M12.5 12.5H22V22h-9.5z" />
+              </svg>
+            </span>
+            <span>Continue with Microsoft</span>
           </button>
         </div>
 
-        <div className="login-feature">
-          <div className="login-feature-card">
-            <div className="login-feature-badge">Feature Highlight</div>
-
-            <div className="login-feature-image">
-              <div className="login-feature-window">
-                <div className="login-feature-window-header">
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="dot" />
-                  <span className="login-feature-window-title">
-                    {brand.appName} Screens Manager
-                  </span>
-                </div>
-                <div className="login-feature-window-body">
-                  <div className="login-feature-window-sidebar" />
-                  <div className="login-feature-window-content">
-                    <div className="login-feature-window-row header" />
-                    <div className="login-feature-window-row" />
-                    <div className="login-feature-window-row" />
-                    <div className="login-feature-window-row" />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="login-feature-text-block">
-              <h2 className="login-feature-title">Full RDM in Screens Manager</h2>
-              <p className="login-feature-text">
-                Manage all your {brand.appName} screens and the devices that power them
-                from a single, intuitive dashboard. Control content, playlists and
-                status in real time.
-              </p>
-            </div>
-          </div>
+        <div className="pp-login-divider">
+          <span>or continue with email</span>
         </div>
+
+        {error ? <div className="pp-login-error">{error}</div> : null}
+
+        {mode === "login" ? (
+          <form className="pp-login-form" onSubmit={submitLogin}>
+            <input
+              className="pp-login-input"
+              type="email"
+              placeholder="Email address"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              required
+            />
+
+            <input
+              className="pp-login-input"
+              type="password"
+              placeholder="Password"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              required
+            />
+
+            <button type="submit" className="pp-login-primary" disabled={busy}>
+              {busy ? "Signing in..." : "Continue with email"}
+            </button>
+          </form>
+        ) : (
+          <form className="pp-login-form" onSubmit={submitSignup}>
+            <input
+              className="pp-login-input"
+              type="text"
+              placeholder="Full name"
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              required
+            />
+
+            <input
+              className="pp-login-input"
+              type="text"
+              placeholder="Organization name"
+              value={organizationName}
+              onChange={(e) => setOrganizationName(e.target.value)}
+              required
+            />
+
+            <input
+              className="pp-login-input"
+              type="text"
+              placeholder="Workspace name"
+              value={workspaceName}
+              onChange={(e) => setWorkspaceName(e.target.value)}
+              required
+            />
+
+            <input
+              className="pp-login-input"
+              type="email"
+              placeholder="Email address"
+              value={signupEmail}
+              onChange={(e) => setSignupEmail(e.target.value)}
+              required
+            />
+
+            <input
+              className="pp-login-input"
+              type="password"
+              placeholder="Create password"
+              value={signupPassword}
+              onChange={(e) => setSignupPassword(e.target.value)}
+              required
+            />
+
+            <button type="submit" className="pp-login-primary" disabled={busy}>
+              {busy ? "Creating account..." : "Start 7-day trial"}
+            </button>
+          </form>
+        )}
       </div>
     </div>
   );
-};
-
-export default LoginPage;
+}

@@ -6,6 +6,10 @@ import { io, Socket } from "socket.io-client";
 import { ensureSchedules, isScheduleActive, pickFullscreenOverride } from "../../lib/scheduling";
 import type { ZoneItemSchedule } from "../../lib/scheduling";
 import "./VirtualScreenPage.css";
+import { getBestAvailableManifest } from "../../runtime/runtime-sync";
+import { resolveMediaUrl } from "../../runtime/media-resolver";
+import type { RuntimeManifestAsset } from "../../runtime/types";
+
 
 import { ALL_LAYOUTS } from "../channels/layouts/ChannelLayouts";
 
@@ -16,11 +20,15 @@ const DEFAULT_TRANSITION_TYPE = "fade";
 const DEFAULT_TRANSITION_MS = 500;
 
 type VSState = "PAIR" | "WAITING" | "PLAYING" | "UNKNOWN";
-
 type ScreenOrientation4 = "LANDSCAPE" | "LANDSCAPE_FLIPPED" | "PORTRAIT" | "PORTRAIT_FLIPPED";
 
-type VsStatePayload = {
-  code: string;
+type RuntimeIdentity = {
+  runtimeKey: string;
+  screenId: string | null;
+};
+
+export type VsStatePayload = {
+  runtimeKey: string;
   state: VSState;
   updatedAt: number;
   playlistAssigned: boolean;
@@ -36,10 +44,8 @@ type VsPlaylistItem = {
   url: string;
   order: number;
   durationMs?: number;
-
   schedules?: ZoneItemSchedule[];
   schedule?: ZoneItemSchedule;
-
   transitionType?: string;
   transitionMs?: number;
 };
@@ -47,7 +53,7 @@ type VsPlaylistItem = {
 type ChannelTransition =
   | {
       enabled?: boolean;
-      type?: string; // Fade | Slide | Push | Wipe | Zoom
+      type?: string;
       durationSec?: number;
       durationMs?: number;
       direction?: string;
@@ -59,8 +65,8 @@ type ChannelTransition =
   | null
   | undefined;
 
-type VsPlaylistPayload = {
-  code: string;
+export type VsPlaylistPayload = {
+  runtimeKey: string;
   playlistId: string | null;
   updatedAt: number;
   items: VsPlaylistItem[];
@@ -73,6 +79,40 @@ type VsPlaylistPayload = {
   };
 };
 
+type VirtualSessionResponse = {
+  id: string;
+  code: string;
+  expiresAt?: string;
+};
+
+type VirtualSessionStatusResponse = {
+  id: string;
+  sessionType: "VIRTUAL_SCREEN";
+  status: "OPEN" | "CLAIMED" | "EXPIRED" | "CANCELLED";
+  code: string;
+  expiresAt?: string;
+  claimedAt?: string | null;
+  screenId?: string | null;
+  runtimeKey?: string | null;
+  screenStatus?: string | null;
+  pairedAt?: string | null;
+  isVirtual?: boolean;
+  screenName?: string | null;
+  metadata?: any;
+};
+
+type PlayerCodeStatusResponse = {
+  code: string;
+  found: boolean;
+  status: "OPEN" | "CLAIMED" | "EXPIRED" | "CANCELLED" | "INVALID";
+  claimed: boolean;
+  runtimeKey: string | null;
+  screenId: string | null;
+  isVirtual: boolean;
+  orientation?: ScreenOrientation4 | "LANDSCAPE";
+};
+
+
 type ZoneRect = {
   id: string;
   leftPct: number;
@@ -81,9 +121,16 @@ type ZoneRect = {
   heightPct: number;
 };
 
-function openKey(code: string) {
-  return `ns2:vs-open:${code}`;
-}
+type MediaRow = {
+  id: string;
+  url: string;
+  type: "image" | "video";
+  name?: string;
+  thumbnailUrl?: string;
+};
+
+const runtimeKeyStorageKey = (key: string) => `ns2:vs-runtime:${key}`;
+const openKey = (key: string) => `ns2:vs-open:${key}`;
 
 function clampPct(n: number) {
   if (!Number.isFinite(n)) return 0;
@@ -91,10 +138,13 @@ function clampPct(n: number) {
 }
 
 function isVsPlaylistItem(x: any): x is VsPlaylistItem {
-  return x && typeof x.id === "string" && (x.type === "image" || x.type === "video") && typeof x.url === "string";
+  return (
+    x &&
+    typeof x.id === "string" &&
+    (x.type === "image" || x.type === "video") &&
+    typeof x.url === "string"
+  );
 }
-
-type MediaRow = { id: string; url: string; type: "image" | "video"; name?: string; thumbnailUrl?: string };
 
 let mediaIndexCache: Record<string, MediaRow> | null = null;
 let mediaIndexInFlight: Promise<Record<string, MediaRow>> | null = null;
@@ -162,7 +212,6 @@ function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>):
   return arr
     .filter((x) => x && typeof x === "object")
     .map((x) => {
-      // CASE A: already resolved
       if (
         typeof (x as any).id === "string" &&
         ((x as any).type === "image" || (x as any).type === "video") &&
@@ -181,7 +230,6 @@ function normalizeZoneItems(raw: unknown, mediaIndex: Record<string, MediaRow>):
         } as VsPlaylistItem;
       }
 
-      // CASE B: ChannelZoneItem shape
       const st = String((x as any).sourceType ?? "").toUpperCase();
       if (st !== "MEDIA") return null;
 
@@ -296,7 +344,35 @@ function transitionMsFromChannel(tr?: ChannelTransition) {
   return Number.isFinite(ms) ? Math.max(0, ms as number) : DEFAULT_TRANSITION_MS;
 }
 
-export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode?: string }) {
+function readStoredRuntimeIdentity(key: string): RuntimeIdentity | null {
+  try {
+    const raw = localStorage.getItem(runtimeKeyStorageKey(key));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    const runtimeKey = String(parsed?.runtimeKey ?? "").trim();
+    const screenId = parsed?.screenId ? String(parsed.screenId) : null;
+    if (!runtimeKey) return null;
+    return { runtimeKey, screenId };
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredRuntimeIdentity(key: string, identity: RuntimeIdentity | null) {
+  try {
+    if (!identity?.runtimeKey) {
+      localStorage.removeItem(runtimeKeyStorageKey(key));
+      return;
+    }
+    localStorage.setItem(runtimeKeyStorageKey(key), JSON.stringify(identity));
+  } catch {}
+}
+
+export default function VirtualScreenPage(props?: {
+  embed?: boolean;
+  pairingCode?: string;
+  sessionId?: string;
+}) {
   const embed = !!props?.embed;
   const forcedCode = props?.pairingCode?.trim().toUpperCase() || "";
 
@@ -304,10 +380,24 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
   const lastPlaylistUpdatedAtRef = useRef<number>(-1);
 
   const params = useParams();
-  const sessionId = useMemo(() => {
+
+  const routeRuntimeKey = useMemo(() => {
     const anyParams = params as Record<string, string | undefined>;
-    return String(anyParams.code ?? anyParams.id ?? anyParams.sessionId ?? "").trim();
+    return String(anyParams.runtimeKey ?? "").trim();
   }, [params]);
+
+  const sessionId = useMemo(() => {
+    if (props?.sessionId) return String(props.sessionId).trim();
+
+    const anyParams = params as Record<string, string | undefined>;
+    const runtimeParam = String(anyParams.runtimeKey ?? "").trim();
+    if (runtimeParam) return "";
+
+    return String(anyParams.code ?? anyParams.id ?? anyParams.sessionId ?? "").trim();
+  }, [params, props?.sessionId]);
+
+  const identityStorageKey = routeRuntimeKey || sessionId;
+  const directRuntimeMode = !!routeRuntimeKey;
 
   const qrValue = useMemo(() => {
     try {
@@ -317,7 +407,6 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     }
   }, []);
 
-  // Room scaling (non-embed only)
   const [scale, setScale] = useState(1);
   useLayoutEffect(() => {
     if (embed) return;
@@ -344,14 +433,22 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
   }, [embed]);
 
   const [pairingCode, setPairingCode] = useState<string>("");
+  const [runtimeIdentity, setRuntimeIdentity] = useState<RuntimeIdentity | null>(() => {
+    if (routeRuntimeKey) {
+      return { runtimeKey: routeRuntimeKey, screenId: null };
+    }
+    return sessionId ? readStoredRuntimeIdentity(sessionId) : null;
+  });
   const [sessionError, setSessionError] = useState<string | null>(null);
 
   const [vsState, setVsState] = useState<VsStatePayload | null>(null);
   const [vsPlaylist, setVsPlaylist] = useState<VsPlaylistPayload | null>(null);
 
+  const runtimeKey = routeRuntimeKey || runtimeIdentity?.runtimeKey || "";
+  const screenId = runtimeIdentity?.screenId ?? vsState?.screenId ?? null;
+
   const sockRef = useRef<Socket | null>(null);
 
-  // Playback state
   const [idx, setIdx] = useState(0);
   const timerRef = useRef<number | null>(null);
   const [refreshSeq, setRefreshSeq] = useState(0);
@@ -373,10 +470,48 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
   const lastProgressAtRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(0);
 
-  // Channel playback state
-  const zoneTimersRef = useRef<Record<string, number>>({});
   const [zoneIdx, setZoneIdx] = useState<Record<string, number>>({});
   const zoneIdxRef = useRef<Record<string, number>>({});
+
+const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
+  const resolvedBlobUrlsRef = useRef<string[]>([]);
+
+    const makeAssetLookupKeys = useCallback((item?: { id?: string; url?: string } | null) => {
+    const keys: string[] = [];
+    const id = String(item?.id ?? "").trim();
+    const url = String(item?.url ?? "").trim();
+
+    if (id) keys.push(id);
+    if (url) keys.push(url);
+
+    return Array.from(new Set(keys));
+  }, []);
+
+  const getPlayableUrl = useCallback(
+    (item?: { id?: string; url?: string } | null) => {
+      if (!item) return "";
+      const keys = makeAssetLookupKeys(item);
+
+      for (const key of keys) {
+        const resolved = assetUrlMap[key];
+        if (resolved) return resolved;
+      }
+
+      return String(item.url ?? "");
+    },
+    [assetUrlMap, makeAssetLookupKeys],
+  );
+  useEffect(() => {
+    return () => {
+      for (const u of resolvedBlobUrlsRef.current) {
+        try {
+          URL.revokeObjectURL(u);
+        } catch {}
+      }
+      resolvedBlobUrlsRef.current = [];
+    };
+  }, []);
+
   useEffect(() => {
     zoneIdxRef.current = zoneIdx;
   }, [zoneIdx]);
@@ -389,9 +524,11 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
 
   const [zoneSwap, setZoneSwap] = useState<Record<string, boolean>>({});
   const [zoneLayerIdx, setZoneLayerIdx] = useState<Record<string, { a: number; b: number }>>({});
-
+  const zoneTimersRef = useRef<Record<string, number>>({});
   const zonePendingAdvanceRef = useRef<Record<string, boolean>>({});
   const zoneTimerItemRef = useRef<Record<string, string>>({});
+  const zoneDueAtRef = useRef<Record<string, number>>({});
+  const zoneTimerSigRef = useRef<Record<string, string>>({});
 
   const channel = vsPlaylist?.channel;
   const channelTransition: ChannelTransition = (channel as any)?.transition ?? null;
@@ -404,18 +541,90 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
   const playingChannel = vsState?.state === "PLAYING" && hasChannel;
   const isPlaying = (playingLegacy && items.length > 0) || playingChannel;
 
-  // ===== Schedules tick
   const [nowTick, setNowTick] = useState(0);
   useEffect(() => {
     const t = window.setInterval(() => setNowTick(Date.now()), 1000);
     return () => window.clearInterval(t);
   }, []);
 
-  // Load media index only if channel exists
   const [mediaIndex, setMediaIndex] = useState<Record<string, MediaRow>>({});
+    
+
+    useEffect(() => {
+  if (!forcedCode) return;
+  if (runtimeIdentity?.runtimeKey) return;
+
+  let cancelled = false;
+
+  const poll = async () => {
+    try {
+      const res = await fetch(
+        `/api/screens/player/code/${encodeURIComponent(forcedCode)}/status`,
+        { credentials: "include" },
+      );
+
+      if (!res.ok) return;
+
+      const data = (await res.json()) as PlayerCodeStatusResponse;
+      if (cancelled) return;
+
+      if (data.code) {
+        setPairingCode(String(data.code).trim().toUpperCase());
+      }
+
+      if (data.claimed && data.runtimeKey) {
+        setRuntimeIdentity({
+          runtimeKey: String(data.runtimeKey),
+          screenId: data.screenId ? String(data.screenId) : null,
+        });
+
+        setVsState((prev) => ({
+          runtimeKey: String(data.runtimeKey),
+          state: "WAITING",
+          updatedAt: Date.now(),
+          playlistAssigned: prev?.playlistAssigned ?? false,
+          exists: true,
+          screenId: data.screenId ? String(data.screenId) : null,
+          isVirtual: false,
+          orientation: (data.orientation as any) ?? "LANDSCAPE",
+        }));
+
+        setSessionError(null);
+        return;
+      }
+
+      if (data.status === "EXPIRED") {
+        setSessionError("This pairing code expired. Relaunch the player.");
+      } else if (data.status === "CANCELLED") {
+        setSessionError("This pairing session was cancelled.");
+      } else {
+        setSessionError(null);
+      }
+    } catch {
+      // silent; screen may be offline and continue from cache
+    }
+  };
+
+  void poll();
+  const t = window.setInterval(poll, 2000);
+
+  return () => {
+    cancelled = true;
+    window.clearInterval(t);
+  };
+}, [forcedCode, runtimeIdentity?.runtimeKey]);
+
+
+
   useEffect(() => {
     let cancelled = false;
+
     if (!hasChannel) return;
+
+    if (directRuntimeMode) {
+      setMediaIndex({});
+      return;
+    }
 
     (async () => {
       const idx2 = await ensureMediaIndex().catch(() => ({}));
@@ -425,9 +634,24 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     return () => {
       cancelled = true;
     };
-  }, [hasChannel]);
+  }, [hasChannel, directRuntimeMode]);
 
-  // ===== Session bootstrap
+  useEffect(() => {
+    if (routeRuntimeKey) {
+      setRuntimeIdentity({ runtimeKey: routeRuntimeKey, screenId: null });
+      return;
+    }
+    if (!sessionId) return;
+    const stored = readStoredRuntimeIdentity(sessionId);
+    setRuntimeIdentity(stored);
+  }, [sessionId, routeRuntimeKey]);
+
+  useEffect(() => {
+    if (routeRuntimeKey) return;
+    if (!sessionId) return;
+    writeStoredRuntimeIdentity(sessionId, runtimeIdentity);
+  }, [sessionId, runtimeIdentity, routeRuntimeKey]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -436,6 +660,10 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       setPairingCode("");
       setVsState(null);
       setVsPlaylist(null);
+
+      if (routeRuntimeKey) {
+        return;
+      }
 
       if (forcedCode) {
         if (!cancelled) setPairingCode(forcedCode);
@@ -457,7 +685,7 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
         return;
       }
 
-      const data = (await res.json()) as { id: string; code: string };
+      const data = (await res.json()) as VirtualSessionResponse;
       const code = String(data.code ?? "").trim().toUpperCase();
       if (!cancelled) setPairingCode(code);
     })();
@@ -465,19 +693,146 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     return () => {
       cancelled = true;
     };
-  }, [sessionId, forcedCode]);
+  }, [sessionId, forcedCode, routeRuntimeKey]);
 
-  // Mark tab open (virtual-only)
+    useEffect(() => {
+    if (!runtimeKey) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const manifest = await getBestAvailableManifest(runtimeKey);
+        if (!manifest || cancelled) return;
+
+        if (manifest.state) {
+          setVsState((prev) => {
+            const nextTs = Number(manifest.state.updatedAt ?? 0);
+            const prevTs = Number(prev?.updatedAt ?? 0);
+            return nextTs >= prevTs ? manifest.state : prev;
+          });
+        }
+
+        if (manifest.playlist) {
+          setVsPlaylist((prev) => {
+            const nextTs = Number(manifest.playlist.updatedAt ?? 0);
+            const prevTs = Number(prev?.updatedAt ?? 0);
+            return nextTs >= prevTs ? manifest.playlist : prev;
+          });
+        }
+
+        const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+        if (!assets.length) return;
+
+        const nextMap: Record<string, string> = {};
+        const newBlobUrls: string[] = [];
+
+        for (const asset of assets as RuntimeManifestAsset[]) {
+          try {
+            const resolvedUrl = await resolveMediaUrl(asset);
+            if (!resolvedUrl) continue;
+
+            const assetId = String(asset.id ?? "").trim();
+            const assetUrl = String(asset.url ?? "").trim();
+
+            if (assetId) nextMap[assetId] = resolvedUrl;
+            if (assetUrl) nextMap[assetUrl] = resolvedUrl;
+
+            if (resolvedUrl.startsWith("blob:")) {
+              newBlobUrls.push(resolvedUrl);
+            }
+          } catch {
+            // keep original remote url fallback
+          }
+        }
+
+        if (cancelled) {
+          for (const u of newBlobUrls) {
+            try {
+              URL.revokeObjectURL(u);
+            } catch {}
+          }
+          return;
+        }
+
+        for (const oldUrl of resolvedBlobUrlsRef.current) {
+          try {
+            URL.revokeObjectURL(oldUrl);
+          } catch {}
+        }
+
+        resolvedBlobUrlsRef.current = newBlobUrls;
+        setAssetUrlMap(nextMap);
+      } catch {
+        // keep silent; websocket/live payload is primary
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeKey]);
+
+
   useEffect(() => {
-    if (!pairingCode || embed) return;
+    if (!sessionId) return;
+    if (routeRuntimeKey) return;
+    if (forcedCode) return;
+    if (runtimeIdentity?.runtimeKey) return;
+
+    let cancelled = false;
+
+    const poll = async () => {
+      try {
+        const res = await fetch(
+          `/api/screens/virtual-session/${encodeURIComponent(sessionId)}/status`,
+          { credentials: "include" },
+        );
+
+        if (!res.ok) return;
+
+        const data = (await res.json()) as VirtualSessionStatusResponse;
+        if (cancelled) return;
+
+        const nextCode = String(data.code ?? "").trim().toUpperCase();
+        if (nextCode) setPairingCode(nextCode);
+
+        if (data.status === "CLAIMED" && data.runtimeKey) {
+          setRuntimeIdentity({
+            runtimeKey: String(data.runtimeKey),
+            screenId: data.screenId ? String(data.screenId) : null,
+          });
+          setSessionError(null);
+          return;
+        }
+
+        if (data.status === "EXPIRED") {
+          setSessionError("This pairing session has expired. Launch a new virtual screen.");
+        } else if (data.status === "CANCELLED") {
+          setSessionError("This pairing session was cancelled.");
+        }
+      } catch {}
+    };
+
+    void poll();
+    const t = window.setInterval(poll, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [sessionId, forcedCode, runtimeIdentity?.runtimeKey, routeRuntimeKey]);
+
+  useEffect(() => {
+    if (!identityStorageKey || embed) return;
 
     lastStateUpdatedAtRef.current = -1;
     lastPlaylistUpdatedAtRef.current = -1;
 
-    const key = openKey(pairingCode);
+    const key = openKey(identityStorageKey);
     const write = () => {
       try {
-        localStorage.setItem(key, JSON.stringify({ ts: Date.now(), sessionId }));
+        localStorage.setItem(key, JSON.stringify({ ts: Date.now(), key: identityStorageKey }));
       } catch {}
     };
 
@@ -490,31 +845,41 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
         localStorage.removeItem(key);
       } catch {}
     };
-  }, [pairingCode, sessionId, embed]);
+  }, [identityStorageKey, embed]);
 
-  // ===== Socket (role=device in embed)
   useEffect(() => {
-    if (!pairingCode) return;
+    if (!runtimeKey) return;
 
     const s = io("/virtual-screen", {
       path: "/ws",
       withCredentials: true,
       transports: ["websocket", "polling"],
-      query: { code: pairingCode, role: embed ? "device" : "virtual" },
+      query: { runtimeKey, role: embed ? "device" : "virtual" },
     });
 
     sockRef.current = s;
 
     const onState = (p: VsStatePayload) => {
-      if (!p || String(p.code ?? "").toUpperCase() !== pairingCode) return;
+      if (!p || String(p.runtimeKey ?? "") !== runtimeKey) return;
       const ua = Number(p.updatedAt ?? 0);
       if (ua === lastStateUpdatedAtRef.current) return;
       lastStateUpdatedAtRef.current = ua;
       setVsState(p);
+
+      if (p.runtimeKey && p.screenId) {
+        setRuntimeIdentity((prev) => ({
+          runtimeKey: prev?.runtimeKey || p.runtimeKey,
+          screenId: p.screenId,
+        }));
+      }
+
+      if (!p.exists && !directRuntimeMode && identityStorageKey) {
+        setRuntimeIdentity(null);
+      }
     };
 
     const onPlaylist = (p: VsPlaylistPayload) => {
-      if (!p || String(p.code ?? "").toUpperCase() !== pairingCode) return;
+      if (!p || String(p.runtimeKey ?? "") !== runtimeKey) return;
       const ua = Number(p.updatedAt ?? 0);
       if (ua === lastPlaylistUpdatedAtRef.current) return;
       lastPlaylistUpdatedAtRef.current = ua;
@@ -526,8 +891,8 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       if (b?.playlist) onPlaylist(b.playlist);
     };
 
-    const onRefresh = (evt: { code?: string; ts?: number }) => {
-      if (!evt || String(evt.code ?? "").toUpperCase() !== pairingCode) return;
+    const onRefresh = (evt: { screenId?: string; ts?: number }) => {
+      if (!evt || !screenId || String(evt.screenId ?? "") !== String(screenId)) return;
       setIdx(0);
       setZoneIdx({});
       setZoneActiveLayer({});
@@ -541,7 +906,7 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     s.on("vs:bundle", onBundle);
     s.on("vs:refresh", onRefresh);
 
-    const ping = () => s.emit("vs:ping", { code: pairingCode });
+    const ping = () => s.emit("vs:ping", { runtimeKey });
     ping();
     const t = window.setInterval(ping, 5000);
 
@@ -550,22 +915,25 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       s.disconnect();
       sockRef.current = null;
     };
-  }, [pairingCode, embed]);
+  }, [runtimeKey, embed, screenId, directRuntimeMode, identityStorageKey]);
 
-  // Reset legacy index when items change
   useEffect(() => {
     setIdx(0);
   }, [vsPlaylist?.playlistId, items.length]);
 
   const currentItem = playingLegacy ? items[idx % items.length] : null;
 
-  const mediaUrl = useMemo(() => {
-    if (!currentItem?.url) return "";
-    const u = String(currentItem.url);
-    const sep = u.includes("?") ? "&" : "?";
-    if (!refreshSeq) return u;
-    return `${u}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
-  }, [currentItem?.url, refreshSeq]);
+    const mediaUrl = useMemo(() => {
+    if (!currentItem) return "";
+    const base = getPlayableUrl(currentItem);
+    if (!base) return "";
+
+    if (base.startsWith("blob:")) return base;
+
+    const sep = base.includes("?") ? "&" : "?";
+    if (!refreshSeq) return base;
+    return `${base}${sep}r=${encodeURIComponent(String(refreshSeq))}`;
+  }, [currentItem, refreshSeq, getPlayableUrl]);
 
   const advance = () => {
     if (!items.length) return;
@@ -661,7 +1029,6 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     };
   }, [playingLegacy, currentItem?.id, refreshSeq, audioUnlocked]);
 
-  // ===== Channel layout lookup
   const layoutDef = useMemo(() => {
     const layoutId = channel?.layoutId ? String(channel.layoutId) : "";
     if (!layoutId) return null;
@@ -673,7 +1040,6 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     );
   }, [channel?.layoutId]);
 
-  // Convert layout coords to %
   function toPctAxis(v: unknown, axis: "x" | "y", designW: number, designH: number) {
     const n = Number((v as any) ?? 0);
     if (!Number.isFinite(n)) return 0;
@@ -722,10 +1088,9 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       const sep = u.includes("?") ? "&" : "?";
       return `${u}${sep}r=${encodeURIComponent(String(refreshSeq || 0))}`;
     },
-    [refreshSeq]
+    [refreshSeq],
   );
 
-  // Normalize channel zones + schedule filter
   const zoneItemsMap = useMemo(() => {
     const rawZones = channel?.zones ?? {};
     const map: Record<string, VsPlaylistItem[]> = {};
@@ -783,102 +1148,79 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
     return `${cid}|${lid}|${ua}|${refreshSeq}`;
   }, [channel?.channelId, channel?.layoutId, vsPlaylist?.updatedAt, refreshSeq]);
 
+  const zonePlaybackSig = useMemo(() => {
+    const keys = Object.keys(zoneIdx).sort();
+    return keys.map((k) => `${k}:${zoneIdx[k] ?? 0}:${zoneActiveLayer[k] ?? "a"}`).join("|");
+  }, [zoneIdx, zoneActiveLayer]);
+
   useEffect(() => {
-    for (const k of Object.keys(zoneTimersRef.current)) window.clearTimeout(zoneTimersRef.current[k]);
+    for (const k of Object.keys(zoneTimersRef.current)) {
+      window.clearTimeout(zoneTimersRef.current[k]);
+    }
     zoneTimersRef.current = {};
+    zoneTimerItemRef.current = {};
+    zonePendingAdvanceRef.current = {};
+    zoneDueAtRef.current = {};
+    zoneTimerSigRef.current = {};
 
     if (!playingChannel) return;
 
     const zoneKeys = Object.keys(zoneItemsMap);
 
-    setZoneIdx(() => {
+    setZoneIdx((prev) => {
       const next: Record<string, number> = {};
-      for (const zid of zoneKeys) next[zid] = 0;
-      return next;
-    });
-
-    setZoneActiveLayer(() => {
-      const next: Record<string, "a" | "b"> = {};
-      for (const zid of zoneKeys) next[zid] = "a";
-      return next;
-    });
-
-    setZoneSwap(() => {
-      const next: Record<string, boolean> = {};
-      for (const zid of zoneKeys) next[zid] = false;
-      return next;
-    });
-
-    setZoneLayerIdx(() => {
-      const next: Record<string, { a: number; b: number }> = {};
       for (const zid of zoneKeys) {
         const len = (zoneItemsMap[zid] ?? []).length;
-        next[zid] = { a: 0, b: len > 1 ? 1 : 0 };
+        const prevIdx = prev[zid] ?? 0;
+        next[zid] = len > 0 ? ((prevIdx % len) + len) % len : 0;
       }
+      zoneIdxRef.current = next;
       return next;
     });
 
-    zonePendingAdvanceRef.current = {};
-    zoneTimerItemRef.current = {};
+    setZoneActiveLayer((prev) => {
+      const next: Record<string, "a" | "b"> = {};
+      for (const zid of zoneKeys) next[zid] = prev[zid] ?? "a";
+      return next;
+    });
 
-    return () => {
-      for (const k of Object.keys(zoneTimersRef.current)) window.clearTimeout(zoneTimersRef.current[k]);
-      zoneTimersRef.current = {};
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playingChannel, channelSig]);
-
-  useEffect(() => {
-    if (!playingChannel) return;
-
-    setZoneIdx((prev) => {
-      const next = { ...prev };
-      for (const zid of Object.keys(zoneItemsMap)) {
-        const len = (zoneItemsMap[zid] ?? []).length;
-        if (!len) {
-          next[zid] = 0;
-          continue;
-        }
-        const cur = next[zid] ?? 0;
-        next[zid] = ((cur % len) + len) % len;
-      }
+    setZoneSwap((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const zid of zoneKeys) next[zid] = prev[zid] ?? false;
       return next;
     });
 
     setZoneLayerIdx((prev) => {
-      const next = { ...prev };
-      for (const zid of Object.keys(zoneItemsMap)) {
-        const arr = zoneItemsMap[zid] ?? [];
-        const len = arr.length;
-        if (!len) {
+      const next: Record<string, { a: number; b: number }> = {};
+      for (const zid of zoneKeys) {
+        const len = (zoneItemsMap[zid] ?? []).length;
+        if (len <= 0) {
           next[zid] = { a: 0, b: 0 };
           continue;
         }
-        const curIdx = (zoneIdxRef.current[zid] ?? 0) % len;
-        const li = next[zid] ?? { a: curIdx, b: (curIdx + 1) % len };
-        const a = ((li.a ?? curIdx) % len + len) % len;
-        const b = ((li.b ?? (curIdx + 1)) % len + len) % len;
+
+        const prevPair = prev[zid];
+        const curIdx = ((zoneIdxRef.current[zid] ?? 0) % len + len) % len;
+        const a = prevPair ? (((prevPair.a ?? curIdx) % len) + len) % len : curIdx;
+        const b = prevPair
+          ? (((prevPair.b ?? (curIdx + 1)) % len) + len) % len
+          : (curIdx + 1) % len;
+
         next[zid] = { a, b: len > 1 ? b : a };
       }
       return next;
     });
 
-    setZoneActiveLayer((prev) => {
-      const next = { ...prev };
-      for (const zid of Object.keys(zoneItemsMap)) if (!next[zid]) next[zid] = "a";
-      return next;
-    });
-
-    setZoneSwap((prev) => {
-      const next = { ...prev };
-      for (const zid of Object.keys(zoneItemsMap)) if (next[zid] == null) next[zid] = false;
-      return next;
-    });
-
-    for (const zid of Object.keys(zonePendingAdvanceRef.current)) {
-      if (!(zid in zoneItemsMap)) delete zonePendingAdvanceRef.current[zid];
-    }
-  }, [zoneListSig, playingChannel]);
+    return () => {
+      for (const k of Object.keys(zoneTimersRef.current)) {
+        window.clearTimeout(zoneTimersRef.current[k]);
+      }
+      zoneTimersRef.current = {};
+      zoneTimerItemRef.current = {};
+      zoneDueAtRef.current = {};
+      zoneTimerSigRef.current = {};
+    };
+  }, [playingChannel, channelSig, zoneListSig]);
 
   useEffect(() => {
     if (!playingChannel) return;
@@ -891,18 +1233,22 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
         const a = arr[0];
         const b = arr.length > 1 ? arr[1] : null;
 
-        const ua = withRefresh(a.url);
+                const uaBase = getPlayableUrl(a);
+        const ua = uaBase.startsWith("blob:") ? uaBase : withRefresh(uaBase);
         if (a.type === "image") await preloadImage(ua);
         else await preloadVideo(ua);
 
         if (b) {
-          const ub = withRefresh(b.url);
+          const ubBase = getPlayableUrl(b);
+          const ub = ubBase.startsWith("blob:") ? ubBase : withRefresh(ubBase);
           if (b.type === "image") await preloadImage(ub);
           else await preloadVideo(ub);
         }
+
       }
     })();
-  }, [playingChannel, zoneListSig, withRefresh, zoneItemsMap]);
+  }, [playingChannel, zoneListSig, withRefresh, zoneItemsMap, getPlayableUrl]);
+
 
   const getTransType = useCallback(
     (zid: string) => {
@@ -917,7 +1263,7 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       const chType = normalizeTransitionType(channelTransition?.type ?? DEFAULT_TRANSITION_TYPE);
       return itemType ?? chType ?? DEFAULT_TRANSITION_TYPE;
     },
-    [channelTransition]
+    [channelTransition],
   );
 
   const getTransMs = useCallback(
@@ -930,7 +1276,7 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       if (itemMs != null && Number.isFinite(itemMs)) return Math.max(0, itemMs);
       return transitionMsFromChannel(channelTransition);
     },
-    [channelTransition]
+    [channelTransition],
   );
 
   const requestAdvance = useCallback(
@@ -943,7 +1289,7 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
       zonePendingAdvanceRef.current[zid] = true;
 
       try {
-        const curIdx = (zoneIdxRef.current[zid] ?? 0) % len;
+        const curIdx = ((zoneIdxRef.current[zid] ?? 0) % len + len) % len;
         const nextIdx = (curIdx + 1) % len;
 
         const active = zoneActiveLayerRef.current[zid] ?? "a";
@@ -951,45 +1297,70 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
 
         setZoneLayerIdx((prev) => {
           const cur = prev[zid] ?? { a: curIdx, b: nextIdx };
-          return { ...prev, [zid]: { ...cur, [inactive]: nextIdx } };
+          return {
+            ...prev,
+            [zid]: {
+              ...cur,
+              [inactive]: nextIdx,
+            },
+          };
         });
 
         const nextItem = arr[nextIdx];
-        const nextUrl = withRefresh(nextItem.url);
+                const nextBaseUrl = getPlayableUrl(nextItem);
+        const nextUrl = nextBaseUrl.startsWith("blob:") ? nextBaseUrl : withRefresh(nextBaseUrl);
 
         if (nextItem.type === "image") await preloadImage(nextUrl);
         else await preloadVideo(nextUrl);
+
 
         const tType = getTransType(zid);
         const msRaw = getTransMs(zid);
         const transMs = tType === "cut" ? 0 : Math.max(0, Number(msRaw ?? DEFAULT_TRANSITION_MS));
 
         if (transMs <= 0) {
-          setZoneIdx((p) => ({ ...p, [zid]: nextIdx }));
+          setZoneIdx((p) => {
+            const next = { ...p, [zid]: nextIdx };
+            zoneIdxRef.current = next;
+            return next;
+          });
           setZoneActiveLayer((p) => ({ ...p, [zid]: inactive }));
           setZoneSwap((p) => ({ ...p, [zid]: false }));
           zonePendingAdvanceRef.current[zid] = false;
+          zoneTimerItemRef.current[zid] = "";
+          delete zoneTimersRef.current[zid];
+          delete zoneDueAtRef.current[zid];
+          delete zoneTimerSigRef.current[zid];
           return;
         }
 
         setZoneSwap((p) => ({ ...p, [zid]: true }));
 
         window.setTimeout(() => {
-          setZoneIdx((p) => ({ ...p, [zid]: nextIdx }));
+          setZoneIdx((p) => {
+            const next = { ...p, [zid]: nextIdx };
+            zoneIdxRef.current = next;
+            return next;
+          });
           setZoneActiveLayer((p) => ({ ...p, [zid]: inactive }));
           setZoneSwap((p) => ({ ...p, [zid]: false }));
           zonePendingAdvanceRef.current[zid] = false;
+          zoneTimerItemRef.current[zid] = "";
+          delete zoneTimersRef.current[zid];
+          delete zoneDueAtRef.current[zid];
+          delete zoneTimerSigRef.current[zid];
         }, transMs);
       } catch {
         zonePendingAdvanceRef.current[zid] = false;
       }
     },
-    [getTransMs, getTransType, withRefresh]
+        [getTransMs, getTransType, withRefresh, getPlayableUrl],
   );
 
   useEffect(() => {
     if (!playingChannel) return;
 
+    const now = Date.now();
     const map = zoneItemsMapRef.current;
 
     for (const zid of Object.keys(map)) {
@@ -1000,11 +1371,14 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
           window.clearTimeout(zoneTimersRef.current[zid]);
           delete zoneTimersRef.current[zid];
         }
+        delete zoneDueAtRef.current[zid];
+        delete zoneTimerSigRef.current[zid];
         zoneTimerItemRef.current[zid] = "";
         continue;
       }
 
-      const zi = (zoneIdxRef.current[zid] ?? 0) % zoneItems.length;
+      const zi =
+        ((zoneIdxRef.current[zid] ?? 0) % zoneItems.length + zoneItems.length) % zoneItems.length;
       const cur = zoneItems[zi];
       if (!cur) continue;
 
@@ -1013,106 +1387,130 @@ export default function VirtualScreenPage(props?: { embed?: boolean; pairingCode
           window.clearTimeout(zoneTimersRef.current[zid]);
           delete zoneTimersRef.current[zid];
         }
+        delete zoneDueAtRef.current[zid];
+        delete zoneTimerSigRef.current[zid];
         zoneTimerItemRef.current[zid] = cur.id;
         continue;
       }
 
-      if (zoneTimerItemRef.current[zid] === cur.id && zoneTimersRef.current[zid]) continue;
-
-      if (zoneTimersRef.current[zid]) {
-        window.clearTimeout(zoneTimersRef.current[zid]);
-        delete zoneTimersRef.current[zid];
-      }
-
-      zoneTimerItemRef.current[zid] = cur.id;
+      if (zonePendingAdvanceRef.current[zid]) continue;
 
       const ms = Math.max(500, Number(cur.durationMs ?? 5000));
-      zoneTimersRef.current[zid] = window.setTimeout(() => {
-        void requestAdvance(zid);
-      }, ms);
+      const sig = `${cur.id}:${ms}:${cur.type}`;
+
+      const existingSig = zoneTimerSigRef.current[zid];
+      const dueAt = zoneDueAtRef.current[zid] ?? 0;
+      const hasLiveTimer = !!zoneTimersRef.current[zid];
+
+      if (existingSig === sig && hasLiveTimer) {
+        continue;
+      }
+
+      if (existingSig !== sig || !dueAt) {
+        if (zoneTimersRef.current[zid]) {
+          window.clearTimeout(zoneTimersRef.current[zid]);
+          delete zoneTimersRef.current[zid];
+        }
+
+        zoneTimerSigRef.current[zid] = sig;
+        zoneTimerItemRef.current[zid] = cur.id;
+        zoneDueAtRef.current[zid] = now + ms;
+
+        zoneTimersRef.current[zid] = window.setTimeout(() => {
+          delete zoneTimersRef.current[zid];
+          delete zoneDueAtRef.current[zid];
+          zoneTimerItemRef.current[zid] = "";
+          void requestAdvance(zid);
+        }, ms);
+
+        continue;
+      }
+
+      if (!hasLiveTimer) {
+        const remaining = Math.max(0, dueAt - now);
+
+        zoneTimersRef.current[zid] = window.setTimeout(() => {
+          delete zoneTimersRef.current[zid];
+          delete zoneDueAtRef.current[zid];
+          zoneTimerItemRef.current[zid] = "";
+          void requestAdvance(zid);
+        }, remaining);
+      }
     }
-  }, [playingChannel, zoneListSig, channelSig, requestAdvance]);
+  }, [playingChannel, zoneListSig, channelSig, zonePlaybackSig, requestAdvance]);
 
-  // ===== Adaptive rotation + COVER scale (kills letterboxing) =====
-const playerRef = useRef<HTMLDivElement | null>(null);
-const [playerBox, setPlayerBox] = useState({ w: 1, h: 1 });
+  const playerRef = useRef<HTMLDivElement | null>(null);
+  const [playerBox, setPlayerBox] = useState({ w: 1, h: 1 });
 
-// measure the real visible box
-useLayoutEffect(() => {
-  const el = playerRef.current;
-  if (!el) return;
+  useLayoutEffect(() => {
+    const el = playerRef.current;
+    if (!el) return;
 
-  let raf = 0;
+    let raf = 0;
 
-  const measure = () => {
-    const r = el.getBoundingClientRect();
-    setPlayerBox({ w: Math.max(1, r.width), h: Math.max(1, r.height) });
-  };
+    const measure = () => {
+      const r = el.getBoundingClientRect();
+      setPlayerBox({ w: Math.max(1, r.width), h: Math.max(1, r.height) });
+    };
 
-  const schedule = () => {
-    if (raf) cancelAnimationFrame(raf);
-    raf = requestAnimationFrame(measure);
-  };
+    const schedule = () => {
+      if (raf) cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(measure);
+    };
 
-  measure();
-  window.addEventListener("resize", schedule);
-  window.addEventListener("orientationchange", schedule);
-  window.visualViewport?.addEventListener("resize", schedule);
-  window.visualViewport?.addEventListener("scroll", schedule);
+    measure();
+    window.addEventListener("resize", schedule);
+    window.addEventListener("orientationchange", schedule);
+    window.visualViewport?.addEventListener("resize", schedule);
+    window.visualViewport?.addEventListener("scroll", schedule);
 
-  return () => {
-    if (raf) cancelAnimationFrame(raf);
-    window.removeEventListener("resize", schedule);
-    window.removeEventListener("orientationchange", schedule);
-    window.visualViewport?.removeEventListener("resize", schedule);
-    window.visualViewport?.removeEventListener("scroll", schedule);
-  };
-}, [embed, scale, isPlaying, vsState?.orientation]);
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      window.removeEventListener("resize", schedule);
+      window.removeEventListener("orientationchange", schedule);
+      window.visualViewport?.removeEventListener("resize", schedule);
+      window.visualViewport?.removeEventListener("scroll", schedule);
+    };
+  }, [embed, scale, isPlaying, vsState?.orientation]);
 
-const screenOrientation = ((vsState as any)?.orientation ?? "LANDSCAPE") as ScreenOrientation4;
-const desiredBase: "landscape" | "portrait" = String(screenOrientation).startsWith("PORTRAIT") ? "portrait" : "landscape";
-const isFlipped = String(screenOrientation).endsWith("_FLIPPED");
+  const screenOrientation = ((vsState as any)?.orientation ?? "LANDSCAPE") as ScreenOrientation4;
+  const desiredBase: "landscape" | "portrait" = String(screenOrientation).startsWith("PORTRAIT") ? "portrait" : "landscape";
+  const isFlipped = String(screenOrientation).endsWith("_FLIPPED");
 
-// what the viewport currently is
-const viewportBase: "landscape" | "portrait" = playerBox.w >= playerBox.h ? "landscape" : "portrait";
+  const viewportBase: "landscape" | "portrait" = playerBox.w >= playerBox.h ? "landscape" : "portrait";
+  const baseRot = viewportBase === desiredBase ? 0 : desiredBase === "portrait" ? 90 : 270;
+  const rotDeg = (baseRot + (isFlipped ? 180 : 0)) % 360;
 
-// rotate ONLY if viewport base != desired base
-const baseRot = viewportBase === desiredBase ? 0 : desiredBase === "portrait" ? 90 : 270;
-const rotDeg = (baseRot + (isFlipped ? 180 : 0)) % 360;
+  const contentDesignW = desiredBase === "portrait" ? 1080 : 1920;
+  const contentDesignH = desiredBase === "portrait" ? 1920 : 1080;
 
-// design canvas
-const contentDesignW = desiredBase === "portrait" ? 1080 : 1920;
-const contentDesignH = desiredBase === "portrait" ? 1920 : 1080;
+  const swap = rotDeg % 180 !== 0;
+  const rotW = swap ? contentDesignH : contentDesignW;
+  const rotH = swap ? contentDesignW : contentDesignH;
+  const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) * 1.02;
 
-// bounding box after rotation
-const swap = rotDeg % 180 !== 0;
-const rotW = swap ? contentDesignH : contentDesignW;
-const rotH = swap ? contentDesignW : contentDesignH;
-
-// ✅ COVER (no borders). Overscan removes 1px gaps
-const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) * 1.02;
-
-const stageStyle = useMemo<React.CSSProperties>(() => {
-  return {
-    position: "absolute",
-    left: "50%",
-    top: "50%",
-    width: `${contentDesignW}px`,
-    height: `${contentDesignH}px`,
-    transformOrigin: "center center",
-    transform: `translate(-50%, -50%) rotate(${rotDeg}deg) scale(${s})`,
-    overflow: "hidden",
-  };
-}, [contentDesignW, contentDesignH, rotDeg, s]);
+  const stageStyle = useMemo<React.CSSProperties>(() => {
+    return {
+      position: "absolute",
+      left: "50%",
+      top: "50%",
+      width: `${contentDesignW}px`,
+      height: `${contentDesignH}px`,
+      transformOrigin: "center center",
+      transform: `translate(-50%, -50%) rotate(${rotDeg}deg) scale(${s})`,
+      overflow: "hidden",
+    };
+  }, [contentDesignW, contentDesignH, rotDeg, s]);
 
   const codeForUi = pairingCode || "— — — — —";
 
   const emptyPlaylistMsg =
-    vsState?.state === "PLAYING" && !playingLegacy && !playingChannel ? "Playlist/channel is empty. Upload content to play." : null;
+    vsState?.state === "PLAYING" && !playingLegacy && !playingChannel
+      ? "Playlist/channel is empty. Upload content to play."
+      : null;
 
   const tvClass = `vs-tv ${(playingLegacy && currentItem) || playingChannel ? "vs-tv--media" : ""}`;
 
-  // HARD FORCE fill styles (do NOT rely on CSS classes)
   const videoFillStyle = useMemo<React.CSSProperties>(
     () => ({
       position: "absolute",
@@ -1125,7 +1523,7 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
       display: "block",
       backgroundColor: "#000",
     }),
-    []
+    [],
   );
 
   const bgFillBase = useMemo<React.CSSProperties>(
@@ -1136,19 +1534,19 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
       backgroundRepeat: "no-repeat",
       backgroundSize: "100% 100%",
     }),
-    []
+    [],
   );
 
-  const renderImageFill = (url: string, key: string) => {
-    const src = withRefresh(url);
+    const renderImageFill = (item: { id?: string; url?: string }, key: string) => {
+    const base = getPlayableUrl(item);
+    const src = base.startsWith("blob:") ? base : withRefresh(base);
     return <div key={key} style={{ ...bgFillBase, backgroundImage: `url("${src}")` }} />;
   };
 
-  // Shared renderer used by BOTH embed and non-embed
+
   const renderPlayback = () => {
     if (!isPlaying) return null;
 
-    // CHANNEL
     if (playingChannel && channel && layoutDef && zoneRects.length > 0) {
       if (fullscreen) {
         const fsItem = fullscreen?.item;
@@ -1156,12 +1554,19 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
 
         return (
           <div className="vs-zoneStage" style={{ position: "absolute", inset: 0 }}>
-            <div className="vs-zone" style={{ left: "0%", top: "0%", width: "100%", height: "100%", overflow: "hidden" }}>
+            <div
+              className="vs-zone"
+              style={{ left: "0%", top: "0%", width: "100%", height: "100%", overflow: "hidden" }}
+            >
               {fsItem.type === "video" ? (
                 <video
                   key={`fs-${fsItem.id}-${refreshSeq}`}
                   style={videoFillStyle}
-                  src={withRefresh(fsItem.url)}
+                  src={(() => {
+  const u = getPlayableUrl(fsItem);
+  return u.startsWith("blob:") ? u : withRefresh(u);
+})()}
+
                   autoPlay
                   playsInline
                   preload="auto"
@@ -1170,7 +1575,7 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
                   loop
                 />
               ) : (
-                renderImageFill(fsItem.url, `fsimg-${fsItem.id}-${refreshSeq}`)
+                renderImageFill(fsItem, `fsimg-${fsItem.id}-${refreshSeq}`)
               )}
             </div>
           </div>
@@ -1179,7 +1584,7 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
 
       return (
         <div className="vs-zoneStage" style={{ position: "absolute", inset: 0 }}>
-          {zoneRects.map((z: ZoneRect) => {
+          {zoneRects.map((z) => {
             const arr = zoneItemsMap[z.id] ?? [];
             if (!arr.length) return null;
 
@@ -1190,7 +1595,6 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
 
             const activeLayer = zoneActiveLayer[z.id] ?? "a";
             const swapNow = !!zoneSwap[z.id];
-
             const bump = () => void requestAdvance(z.id);
 
             const tType = getTransType(z.id);
@@ -1220,20 +1624,24 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
                     <video
                       key={`a-${z.id}-${itemA.id}-${refreshSeq}`}
                       style={videoFillStyle}
-                      src={withRefresh(itemA.url)}
-                      autoPlay
+                      src={(() => {
+  const u = getPlayableUrl(itemA);
+  return u.startsWith("blob:") ? u : withRefresh(u);
+})()}
+
+                      autoPlay={activeLayer === "a"}
                       playsInline
                       preload="auto"
                       muted={!(soundEnabled && audioUnlocked)}
                       controls={false}
-                      loop={arr.length === 1}
-                      onEnded={arr.length === 1 ? undefined : bump}
-                      onError={arr.length === 1 ? undefined : bump}
-                      onAbort={arr.length === 1 ? undefined : bump}
-                      onStalled={arr.length === 1 ? undefined : bump}
+                      loop={arr.length === 1 && activeLayer === "a"}
+                      onEnded={activeLayer === "a" && arr.length > 1 ? bump : undefined}
+                      onError={activeLayer === "a" && arr.length > 1 ? bump : undefined}
+                      onAbort={activeLayer === "a" && arr.length > 1 ? bump : undefined}
+                      onStalled={activeLayer === "a" && arr.length > 1 ? bump : undefined}
                     />
                   ) : (
-                    renderImageFill(itemA.url, `aimg-${z.id}-${itemA.id}-${refreshSeq}`)
+                    renderImageFill(itemA, `aimg-${z.id}-${itemA.id}-${refreshSeq}`)
                   )}
                 </div>
 
@@ -1242,20 +1650,24 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
                     <video
                       key={`b-${z.id}-${itemB.id}-${refreshSeq}`}
                       style={videoFillStyle}
-                      src={withRefresh(itemB.url)}
-                      autoPlay
+                      src={(() => {
+  const u = getPlayableUrl(itemB);
+  return u.startsWith("blob:") ? u : withRefresh(u);
+})()}
+
+                      autoPlay={activeLayer === "b"}
                       playsInline
                       preload="auto"
                       muted={!(soundEnabled && audioUnlocked)}
                       controls={false}
-                      loop={false}
-                      onEnded={bump}
-                      onError={bump}
-                      onAbort={bump}
-                      onStalled={bump}
+                      loop={arr.length === 1 && activeLayer === "b"}
+                      onEnded={activeLayer === "b" && arr.length > 1 ? bump : undefined}
+                      onError={activeLayer === "b" && arr.length > 1 ? bump : undefined}
+                      onAbort={activeLayer === "b" && arr.length > 1 ? bump : undefined}
+                      onStalled={activeLayer === "b" && arr.length > 1 ? bump : undefined}
                     />
                   ) : (
-                    renderImageFill(itemB.url, `bimg-${z.id}-${itemB.id}-${refreshSeq}`)
+                    renderImageFill(itemB, `bimg-${z.id}-${itemB.id}-${refreshSeq}`)
                   )}
                 </div>
               </div>
@@ -1265,7 +1677,6 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
       );
     }
 
-    // LEGACY FULLSCREEN
     if (currentItem?.type === "video") {
       return (
         <div className="vs-videoWrap" style={{ position: "absolute", inset: 0 }}>
@@ -1315,19 +1726,28 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
     }
 
     if (currentItem?.type === "image" && currentItem.url) {
-      return renderImageFill(currentItem.url, `legacyimg-${currentItem.id}-${refreshSeq}`);
+      return renderImageFill(currentItem, `legacyimg-${currentItem.id}-${refreshSeq}`);
     }
 
     return null;
   };
 
-  const playerCommonStyle: React.CSSProperties = { position: "relative", width: "100%", height: "100%", overflow: "hidden" };
-  const frameCommonStyle: React.CSSProperties = { position: "absolute", inset: 0, overflow: "hidden" };
+  const playerCommonStyle: React.CSSProperties = {
+    position: "relative",
+    width: "100%",
+    height: "100%",
+    overflow: "hidden",
+  };
+  const frameCommonStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    overflow: "hidden",
+  };
 
   if (embed) {
     return (
       <div className="vs-root vs-embed">
-        <div ref={playerRef} className="vs-player vs-player--embed" style={playerCommonStyle}>
+        <div className="vs-player vs-player--embed" ref={playerRef} style={playerCommonStyle}>
           <div className="vs-contentFrame" style={frameCommonStyle}>
             <div className="vs-contentStage" style={stageStyle}>
               {renderPlayback()}
@@ -1345,6 +1765,8 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
                   <span className="vs-embedErr">{sessionError}</span>
                 ) : emptyPlaylistMsg ? (
                   <span>{emptyPlaylistMsg}</span>
+                ) : runtimeKey ? (
+                  <span>Runtime linked. Waiting for content…</span>
                 ) : vsState?.state === "WAITING" ? (
                   <span>Waiting for content assignment…</span>
                 ) : (
@@ -1379,7 +1801,7 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
 
                 <ol className="vs-steps">
                   <li>
-                    Log in to your <strong>Novasign</strong> account.
+                    Log in to your <strong>PulsePanels</strong> account.
                   </li>
                   <li>
                     Open <strong>Screens</strong>, click <strong>Pair screen</strong>, and enter this code.
@@ -1395,6 +1817,8 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
                     <span className="vs-debug-err">{sessionError}</span>
                   ) : emptyPlaylistMsg ? (
                     <span>{emptyPlaylistMsg}</span>
+                  ) : runtimeKey ? (
+                    <span>Runtime linked. Waiting for content…</span>
                   ) : vsState?.state === "WAITING" ? (
                     <span>Waiting for content assignment…</span>
                   ) : (
@@ -1405,7 +1829,9 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
 
               <div className="vs-tv-right">
                 <div className="vs-qrWrap">
-                  <div className="vs-qrBox">{qrValue ? <QRCodeSVG value={qrValue} size={220} /> : <div className="vs-qrFallback" />}</div>
+                  <div className="vs-qrBox">
+                    {qrValue ? <QRCodeSVG value={qrValue} size={220} /> : <div className="vs-qrFallback" />}
+                  </div>
                   <div className="vs-qrHint">
                     Or scan this QR code to open this screen
                     <br />
@@ -1434,7 +1860,9 @@ const stageStyle = useMemo<React.CSSProperties>(() => {
               <div className="vs-metaCode">{pairingCode || "—"}</div>
             </div>
 
-            <div className="vs-stripQr">{qrValue ? <QRCodeSVG value={qrValue} size={96} /> : <div className="vs-qrFallbackSmall" />}</div>
+            <div className="vs-stripQr">
+              {qrValue ? <QRCodeSVG value={qrValue} size={96} /> : <div className="vs-qrFallbackSmall" />}
+            </div>
           </div>
         </div>
       </div>

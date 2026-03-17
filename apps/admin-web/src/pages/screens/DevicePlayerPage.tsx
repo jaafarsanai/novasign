@@ -1,9 +1,10 @@
-import React, { useMemo } from "react";
+import React from "react";
 import { useParams } from "react-router-dom";
 import VirtualScreenPage from "../virtual-screen/VirtualScreenPage";
 
 export default function DevicePlayerPage() {
-  const { code } = useParams();
-  const pairingCode = useMemo(() => String(code ?? "").trim().toUpperCase(), [code]);
-  return <VirtualScreenPage embed pairingCode={pairingCode} />;
+  const { id } = useParams();
+  const sessionId = String(id ?? "").trim();
+
+  return <VirtualScreenPage embed sessionId={sessionId} />;
 }

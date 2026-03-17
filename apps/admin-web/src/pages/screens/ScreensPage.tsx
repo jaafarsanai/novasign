@@ -1,4 +1,3 @@
-// apps/admin-web/src/pages/screens/ScreensPage.tsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { io, Socket } from "socket.io-client";
 import PairScreenModal from "./PairScreenModal";
@@ -7,34 +6,41 @@ import { Modal } from "../../ui/Modal";
 import ScreenSetContentModal, { ScreenPickerResult } from "./components/ScreenSetContentModal";
 import "./ScreensPage.css";
 
-type ScreenOrientation4 = "LANDSCAPE" | "LANDSCAPE_FLIPPED" | "PORTRAIT" | "PORTRAIT_FLIPPED";
+type ScreenOrientation4 =
+  | "LANDSCAPE"
+  | "LANDSCAPE_FLIPPED"
+  | "PORTRAIT"
+  | "PORTRAIT_FLIPPED";
 
 type ApiScreenRow = {
   id: string;
   name: string | null;
-  pairingCode: string;
+  runtimeKey: string;
   pairedAt: string | null;
   lastSeenAt: string | null;
   isVirtual: boolean;
+  status: "PENDING" | "PAIRED" | "OFFLINE" | "ARCHIVED";
 
-  // legacy playlist fields (still supported)
   assignedPlaylistId?: string | null;
   assignedPlaylistName?: string | null;
 
-  // generic assignment
   assignedContentType?: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
   assignedContentId?: string | null;
   assignedContentName?: string | null;
 
   virtualSessionId?: string | null;
+  activePairingCode?: string | null;
   orientation?: ScreenOrientation4;
 };
 
 type UiRow = {
   id: string;
   name: string;
-  pairingCode: string;
+  runtimeKey: string;
+  activePairingCode: string | null;
   type: "VIRTUAL" | "DEVICE";
+  status: "PENDING" | "PAIRED" | "OFFLINE" | "ARCHIVED";
+  pairedAt: string | null;
   lastSeenAt: string | null;
 
   assignedPlaylistId: string | null;
@@ -45,30 +51,10 @@ type UiRow = {
   assignedContentName: string | null;
 
   virtualSessionId: string | null;
-
-  // make it required in UI to avoid undefined typing issues
   orientation: ScreenOrientation4;
 };
 
-type ScreenSnapshotEvent = {
-  id: string;
-  name: string | null;
-  pairingCode: string;
-  pairedAt: string | null;
-  lastSeenAt: string | null;
-  isVirtual: boolean;
-
-  assignedPlaylistId: string | null;
-  assignedPlaylistName: string | null;
-
-  assignedContentType?: "PLAYLIST" | "CHANNEL" | "MEDIA" | null;
-  assignedContentId?: string | null;
-  assignedContentName?: string | null;
-
-  virtualSessionId?: string | null;
-  orientation?: ScreenOrientation4;
-};
-
+type ScreenSnapshotEvent = ApiScreenRow;
 type ScreenDeletedEvent = { id: string };
 
 async function readApiError(res: Response) {
@@ -100,39 +86,38 @@ function isOnline(lastSeenAt: string | null, nowMs: number, windowMs = 30_000) {
   if (Number.isNaN(t)) return false;
   return nowMs - t < windowMs;
 }
-function screenBase(o: UiRow["orientation"]): "landscape" | "portrait" {
-  return String(o).startsWith("PORTRAIT") ? "portrait" : "landscape";
-}
 
 function mapApiToUi(s: ApiScreenRow): UiRow {
   const fallback = s.isVirtual ? "Virtual Screen" : "Screen";
 
-  const assignedContentType = (s.assignedContentType as any) ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
-  const assignedContentId = (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
-  const assignedContentName = (s.assignedContentName as any) ?? (s.assignedPlaylistName ?? null);
+  const assignedContentType =
+    (s.assignedContentType as any) ?? (s.assignedPlaylistId ? "PLAYLIST" : null);
+  const assignedContentId =
+    (s.assignedContentId as any) ?? (s.assignedPlaylistId ?? null);
+  const assignedContentName =
+    (s.assignedContentName as any) ?? (s.assignedPlaylistName ?? null);
 
   return {
     id: s.id,
     name: (s.name ?? fallback).trim() || fallback,
-    pairingCode: s.pairingCode,
+    runtimeKey: s.runtimeKey,
+    activePairingCode: s.activePairingCode ?? null,
     type: s.isVirtual ? "VIRTUAL" : "DEVICE",
-    lastSeenAt: s.lastSeenAt,
+    status: s.status ?? "PENDING",
+    pairedAt: s.pairedAt ?? null,
+    lastSeenAt: s.lastSeenAt ?? null,
 
     orientation: (s as any).orientation ?? "LANDSCAPE",
 
-    assignedPlaylistId: (s as any).assignedPlaylistId ?? null,
-    assignedPlaylistName: (s as any).assignedPlaylistName ?? null,
+    assignedPlaylistId: s.assignedPlaylistId ?? null,
+    assignedPlaylistName: s.assignedPlaylistName ?? null,
 
     assignedContentType,
     assignedContentId,
     assignedContentName,
 
-    virtualSessionId: (s as any).virtualSessionId ?? null,
+    virtualSessionId: s.virtualSessionId ?? null,
   };
-}
-
-function openKey(code: string) {
-  return `ns2:vs-open:${String(code || "").trim().toUpperCase()}`;
 }
 
 function formatSourceLabel(r: UiRow) {
@@ -144,9 +129,34 @@ function formatSourceLabel(r: UiRow) {
   if (t === "MEDIA") return `Media: ${name}`;
   if (t === "CHANNEL") return `Channel: ${name}`;
 
-  // fallback (legacy)
   if (r.assignedPlaylistName) return `Playlist: ${r.assignedPlaylistName}`;
   return name;
+}
+
+function statusBadge(r: UiRow, nowTick: number) {
+  const online = isOnline(r.lastSeenAt, nowTick, 30_000);
+
+  if (r.status === "ARCHIVED") {
+    return <span className="ns2-badge ns2-badge-off">Archived</span>;
+  }
+
+  if (r.status === "PENDING") {
+    return <span className="ns2-badge ns2-badge-pending">Pending</span>;
+  }
+
+  if (r.status === "PAIRED" && online) {
+    return <span className="ns2-badge ns2-badge-live">Live</span>;
+  }
+
+  if (r.status === "PAIRED" && !online) {
+    return <span className="ns2-badge ns2-badge-off">Offline</span>;
+  }
+
+  if (r.status === "OFFLINE") {
+    return <span className="ns2-badge ns2-badge-off">Offline</span>;
+  }
+
+  return <span className="ns2-badge ns2-badge-off">Offline</span>;
 }
 
 export default function ScreensPage() {
@@ -165,35 +175,33 @@ export default function ScreensPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
-  // Inline rename state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
   const [renameBusy, setRenameBusy] = useState(false);
 
-  // Delete confirm state
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<UiRow | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
 
-  // Set content modal state
   const [setContentOpen, setSetContentOpen] = useState(false);
   const [setContentScreenId, setSetContentScreenId] = useState<string | null>(null);
   const [setContentBusy, setSetContentBusy] = useState(false);
-  const [setContentScreenOrientation, setSetContentScreenOrientation] = useState<ScreenOrientation4>("LANDSCAPE");
+  const [setContentScreenOrientation, setSetContentScreenOrientation] =
+    useState<ScreenOrientation4>("LANDSCAPE");
 
-  // Orientation modal state
   const [orientOpen, setOrientOpen] = useState(false);
   const [orientTarget, setOrientTarget] = useState<UiRow | null>(null);
   const [orientValue, setOrientValue] = useState<ScreenOrientation4>("LANDSCAPE");
   const [orientBusy, setOrientBusy] = useState(false);
 
-const [orientChannelInfo, setOrientChannelInfo] = useState<{
-  channelId: string;
-  name?: string | null;
-  orientation?: "landscape" | "portrait" | null;
-} | null>(null);
+  const [orientChannelInfo, setOrientChannelInfo] = useState<{
+    channelId: string;
+    name?: string | null;
+    orientation?: "landscape" | "portrait" | null;
+  } | null>(null);
 
-const [orientInfoLoading, setOrientInfoLoading] = useState(false);
+  const [orientInfoLoading, setOrientInfoLoading] = useState(false);
+
   const sockRef = useRef<Socket | null>(null);
 
   async function load() {
@@ -234,31 +242,7 @@ const [orientInfoLoading, setOrientInfoLoading] = useState(false);
         const base = prev ?? [];
         const next = base.slice();
         const idx = next.findIndex((x) => x.id === evt.id);
-
-        const fallback = evt.isVirtual ? "Virtual Screen" : "Screen";
-
-        const assignedContentType = (evt.assignedContentType as any) ?? (evt.assignedPlaylistId ? "PLAYLIST" : null);
-        const assignedContentId = (evt.assignedContentId as any) ?? (evt.assignedPlaylistId ?? null);
-        const assignedContentName = (evt.assignedContentName as any) ?? (evt.assignedPlaylistName ?? null);
-
-        const mapped: UiRow = {
-          id: evt.id,
-          name: (evt.name ?? fallback).trim() || fallback,
-          pairingCode: evt.pairingCode,
-          type: evt.isVirtual ? "VIRTUAL" : "DEVICE",
-          lastSeenAt: evt.lastSeenAt,
-
-          orientation: (evt as any).orientation ?? "LANDSCAPE",
-
-          assignedPlaylistId: evt.assignedPlaylistId,
-          assignedPlaylistName: evt.assignedPlaylistName,
-
-          assignedContentType,
-          assignedContentId,
-          assignedContentName,
-
-          virtualSessionId: (evt as any).virtualSessionId ?? null,
-        };
+        const mapped = mapApiToUi(evt);
 
         if (idx === -1) {
           next.unshift(mapped);
@@ -272,6 +256,14 @@ const [orientInfoLoading, setOrientInfoLoading] = useState(false);
 
     s.on("screens:deleted", (evt: ScreenDeletedEvent) => {
       setRows((prev) => (prev ?? []).filter((x) => x.id !== evt.id));
+    });
+
+    s.on("screens:seen", (evt: { screenId: string; lastSeenAt: string }) => {
+      setRows((prev) =>
+        (prev ?? []).map((x) =>
+          x.id === evt.screenId ? { ...x, lastSeenAt: evt.lastSeenAt } : x,
+        ),
+      );
     });
 
     return () => {
@@ -301,7 +293,11 @@ const [orientInfoLoading, setOrientInfoLoading] = useState(false);
 
     return base.filter((r) => {
       const sourceName = formatSourceLabel(r).toLowerCase();
-      return r.name.toLowerCase().includes(qq) || r.pairingCode.toLowerCase().includes(qq) || sourceName.includes(qq);
+      return (
+        r.name.toLowerCase().includes(qq) ||
+        (r.activePairingCode ?? "").toLowerCase().includes(qq) ||
+        sourceName.includes(qq)
+      );
     });
   }, [rows, q]);
 
@@ -311,35 +307,37 @@ const [orientInfoLoading, setOrientInfoLoading] = useState(false);
   const start = (safePage - 1) * pageSize;
   const paged = filtered.slice(start, start + pageSize);
 
-async function loadAssignedChannelInfo(r: UiRow) {
-  setOrientChannelInfo(null);
+  async function loadAssignedChannelInfo(r: UiRow) {
+    setOrientChannelInfo(null);
 
-  if (r.assignedContentType !== "CHANNEL" || !r.assignedContentId) return;
+    if (r.assignedContentType !== "CHANNEL" || !r.assignedContentId) return;
 
-  setOrientInfoLoading(true);
-  try {
-    const res = await fetch(`/api/channels/${encodeURIComponent(r.assignedContentId)}`, {
-      credentials: "include",
-    });
-    if (!res.ok) return;
+    setOrientInfoLoading(true);
+    try {
+      const res = await fetch(`/api/channels/${encodeURIComponent(r.assignedContentId)}`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
 
-    const data: any = await res.json().catch(() => null);
-    const item = data?.item ?? data?.data ?? data ?? null;
+      const data: any = await res.json().catch(() => null);
+      const item = data?.item ?? data?.data ?? data ?? null;
 
-    const orientation =
-      item?.orientation === "portrait" ? "portrait" :
-      item?.orientation === "landscape" ? "landscape" :
-      null;
+      const orientation =
+        item?.orientation === "portrait"
+          ? "portrait"
+          : item?.orientation === "landscape"
+            ? "landscape"
+            : null;
 
-    setOrientChannelInfo({
-      channelId: String(item?.id ?? r.assignedContentId),
-      name: item?.name ?? r.assignedContentName ?? null,
-      orientation,
-    });
-  } finally {
-    setOrientInfoLoading(false);
+      setOrientChannelInfo({
+        channelId: String(item?.id ?? r.assignedContentId),
+        name: item?.name ?? r.assignedContentName ?? null,
+        orientation,
+      });
+    } finally {
+      setOrientInfoLoading(false);
+    }
   }
-}
 
   async function launchVirtualScreen() {
     setError(null);
@@ -394,7 +392,7 @@ async function loadAssignedChannelInfo(r: UiRow) {
   }
 
   async function assignPickedToScreen(screenId: string, picked: ScreenPickerResult) {
-    const type = picked.type; // channel|playlist|media (lowercase)
+    const type = picked.type;
     const id = picked.item.id;
 
     setSetContentBusy(true);
@@ -512,97 +510,140 @@ async function loadAssignedChannelInfo(r: UiRow) {
     await load();
   }
 
-  function openPreview(r: UiRow) {
-    setError(null);
-
-    if (r.type === "VIRTUAL") {
-      if (r.virtualSessionId) {
-        window.open(`/virtual-screen/${encodeURIComponent(r.virtualSessionId)}`, "_blank", "noopener,noreferrer");
-        setMenuOpenId(null);
-        return;
-      }
-
-      try {
-        const raw = localStorage.getItem(openKey(r.pairingCode));
-        if (raw) {
-          const parsed = JSON.parse(raw) as { ts?: number; sessionId?: string };
-          const ts = Number(parsed?.ts ?? 0);
-          const sid = String(parsed?.sessionId ?? "").trim();
-          const fresh = Number.isFinite(ts) && Date.now() - ts < 15_000;
-
-          if (fresh && sid) {
-            window.open(`/virtual-screen/${encodeURIComponent(sid)}`, "_blank", "noopener,noreferrer");
-            setMenuOpenId(null);
-            return;
-          }
-        }
-      } catch {}
-
-      setError(
-        "Preview is not available from this browser/profile right now. If the virtual screen is open in another browser/device, use that tab. Otherwise, click Refresh and try Preview again."
-      );
-      setMenuOpenId(null);
-      return;
-    }
-
-    setError("Preview is available only for Virtual Screens.");
-    setMenuOpenId(null);
-  }
-
-  async function saveOrientation() {
-  if (!orientTarget) return;
-  setOrientBusy(true);
+async function activateScreen(r: UiRow) {
   setError(null);
+  setMenuOpenId(null);
 
-  try {
-    // ✅ POINT (5) - UI guard (prevents backend 400 + gives clear message)
-    const assignedChannelBase = orientChannelInfo?.orientation ?? null;
-    const restrictByChannel =
-      orientTarget.assignedContentType === "CHANNEL" &&
-      !!orientTarget.assignedContentId &&
-      !!assignedChannelBase;
-
-    if (restrictByChannel) {
-      const nextBase = String(orientValue).startsWith("PORTRAIT") ? "portrait" : "landscape";
-      if (nextBase !== assignedChannelBase) {
-        setError(
-          `This screen is assigned to a ${assignedChannelBase} channel. Change content first, or choose a ${assignedChannelBase} orientation.`
-        );
-        return;
-      }
-    }
-
-    const res = await fetch(`/api/screens/${encodeURIComponent(orientTarget.id)}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ orientation: orientValue }),
-    });
-
-    if (!res.ok) {
-      setError(await readApiError(res));
-      return;
-    }
-
-    await load();
-    setOrientOpen(false);
-    setOrientTarget(null);
-  } finally {
-    setOrientBusy(false);
+  if (!r.activePairingCode) {
+    setError("No active pairing code available for this screen.");
+    return;
   }
+
+  const res = await fetch("/api/screens/pair", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ code: r.activePairingCode }),
+  });
+
+  if (!res.ok) {
+    setError(await readApiError(res));
+    return;
+  }
+
+  await load();
 }
 
-// ===== Orientation modal restrictions (compute ONCE, outside table loop) =====
-const assignedChannelBase = orientChannelInfo?.orientation ?? null;
+ async function inactivateScreen(r: UiRow) {
+  setError(null);
+  setMenuOpenId(null);
 
-const restrictByChannel =
-  !!orientTarget &&
-  orientTarget.assignedContentType === "CHANNEL" &&
-  !!orientTarget.assignedContentId &&
-  !!assignedChannelBase;
+  const res = await fetch(`/api/screens/${encodeURIComponent(r.id)}/unpair`, {
+    method: "POST",
+    credentials: "include",
+  });
 
-const disablePortrait = restrictByChannel && assignedChannelBase === "landscape";
-const disableLandscape = restrictByChannel && assignedChannelBase === "portrait";
+  if (!res.ok) {
+    setError(await readApiError(res));
+    return;
+  }
+
+  await load();
+}
+
+  async function openPreview(r: UiRow) {
+  setError(null);
+  setMenuOpenId(null);
+
+  if (r.type !== "VIRTUAL") {
+    setError("Preview is available only for Virtual Screens.");
+    return;
+  }
+
+  const isPending = r.status === "PENDING";
+  const hasRuntime = !!r.runtimeKey;
+
+  if (!isPending && hasRuntime) {
+    window.open(
+      `/virtual-screen/runtime/${encodeURIComponent(r.runtimeKey)}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
+    return;
+  }
+
+  const res = await fetch(`/api/screens/${encodeURIComponent(r.id)}/preview-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+  });
+
+  if (!res.ok) {
+    setError(await readApiError(res));
+    return;
+  }
+
+  const data = (await res.json()) as { id: string; code: string };
+
+  window.open(
+    `/virtual-screen/${encodeURIComponent(data.id)}`,
+    "_blank",
+    "noopener,noreferrer",
+  );
+}
+
+  async function saveOrientation() {
+    if (!orientTarget) return;
+    setOrientBusy(true);
+    setError(null);
+
+    try {
+      const assignedChannelBase = orientChannelInfo?.orientation ?? null;
+      const restrictByChannel =
+        orientTarget.assignedContentType === "CHANNEL" &&
+        !!orientTarget.assignedContentId &&
+        !!assignedChannelBase;
+
+      if (restrictByChannel) {
+        const nextBase = String(orientValue).startsWith("PORTRAIT") ? "portrait" : "landscape";
+        if (nextBase !== assignedChannelBase) {
+          setError(
+            `This screen is assigned to a ${assignedChannelBase} channel. Change content first, or choose a ${assignedChannelBase} orientation.`,
+          );
+          return;
+        }
+      }
+
+      const res = await fetch(`/api/screens/${encodeURIComponent(orientTarget.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ orientation: orientValue }),
+      });
+
+      if (!res.ok) {
+        setError(await readApiError(res));
+        return;
+      }
+
+      await load();
+      setOrientOpen(false);
+      setOrientTarget(null);
+    } finally {
+      setOrientBusy(false);
+    }
+  }
+
+  const assignedChannelBase = orientChannelInfo?.orientation ?? null;
+
+  const restrictByChannel =
+    !!orientTarget &&
+    orientTarget.assignedContentType === "CHANNEL" &&
+    !!orientTarget.assignedContentId &&
+    !!assignedChannelBase;
+
+  const disablePortrait = restrictByChannel && assignedChannelBase === "landscape";
+  const disableLandscape = restrictByChannel && assignedChannelBase === "portrait";
 
   return (
     <div className={`ns2-screens-page ${showEmpty ? "ns2-screens-page--empty" : ""}`}>
@@ -691,10 +732,19 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
                     </div>
                   </div>
 
-                  <img className="screens-empty-card-illus" src="/assets/icons/screenlayout.svg" alt="" draggable={false} />
+                  <img
+                    className="screens-empty-card-illus"
+                    src="/assets/icons/screenlayout.svg"
+                    alt=""
+                    draggable={false}
+                  />
                 </div>
 
-                <button type="button" className="btn btn-ghost screens-empty-card-cta screens-empty-card-cta--pill" onClick={launchVirtualScreen}>
+                <button
+                  type="button"
+                  className="btn btn-ghost screens-empty-card-cta screens-empty-card-cta--pill"
+                  onClick={launchVirtualScreen}
+                >
                   Launch a Virtual Screen
                 </button>
               </div>
@@ -711,15 +761,14 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
                   <th>Type</th>
                   <th>Status</th>
                   <th>Source</th>
+                  <th>Pairing code</th>
                   <th>Last seen</th>
                   <th className="ns2-th-right">Actions</th>
                 </tr>
               </thead>
 
               <tbody>
-                {
-                  paged.map((r) => {
-                  const online = isOnline(r.lastSeenAt, nowTick, 30_000);
+                {paged.map((r) => {
                   const isEditing = editingId === r.id;
                   const sourceLabel = formatSourceLabel(r);
 
@@ -727,7 +776,13 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
                     <tr key={r.id}>
                       <td className="ns2-td-strong">
                         <div className="ns2-rowtitle">
-                          <span className={"ns2-thumb " + (r.type === "VIRTUAL" ? "ns2-thumb-virtual" : "ns2-thumb-device")} aria-hidden />
+                          <span
+                            className={
+                              "ns2-thumb " +
+                              (r.type === "VIRTUAL" ? "ns2-thumb-virtual" : "ns2-thumb-device")
+                            }
+                            aria-hidden
+                          />
 
                           {isEditing ? (
                             <input
@@ -749,7 +804,11 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
                               }}
                             />
                           ) : (
-                            <button type="button" className="ns2-namebtn" onClick={() => startRename(r)}>
+                            <button
+                              type="button"
+                              className="ns2-namebtn"
+                              onClick={() => startRename(r)}
+                            >
                               {r.name}
                             </button>
                           )}
@@ -757,35 +816,52 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
                       </td>
 
                       <td>{r.type}</td>
-
-                      <td>
-                        {online ? <span className="ns2-badge ns2-badge-live">Live</span> : <span className="ns2-badge ns2-badge-off">Offline</span>}
-                      </td>
-
+                      <td>{statusBadge(r, nowTick)}</td>
                       <td className="ns2-muted">{sourceLabel}</td>
+                      <td className="ns2-muted ns2-mono">{r.activePairingCode ?? "—"}</td>
                       <td className="ns2-muted">{formatTime(r.lastSeenAt)}</td>
 
                       <td className="ns2-td-right">
                         <div className="ns2-menu-root">
-                          <button type="button" className="ns2-menu-btn" onClick={() => setMenuOpenId((prev) => (prev === r.id ? null : r.id))}>
+                          <button
+                            type="button"
+                            className="ns2-menu-btn"
+                            onClick={() => setMenuOpenId((prev) => (prev === r.id ? null : r.id))}
+                          >
                             ⋯
                           </button>
 
                           {menuOpenId === r.id && (
                             <div className="ns2-menu">
-                              <button type="button" className="ns2-menu-item" onClick={() => openPreview(r)}>
+                              <button
+                                type="button"
+                                className="ns2-menu-item"
+                                onClick={() => openPreview(r)}
+                              >
                                 Preview
                               </button>
 
-                              <button type="button" className="ns2-menu-item" onClick={() => openSetContent(r)}>
+                              <button
+                                type="button"
+                                className="ns2-menu-item"
+                                onClick={() => openSetContent(r)}
+                              >
                                 Set content
                               </button>
 
-                              <button type="button" className="ns2-menu-item" onClick={() => refreshScreen(r)}>
+                              <button
+                                type="button"
+                                className="ns2-menu-item"
+                                onClick={() => refreshScreen(r)}
+                              >
                                 Refresh
                               </button>
 
-                              <button type="button" className="ns2-menu-item" onClick={() => startRename(r)}>
+                              <button
+                                type="button"
+                                className="ns2-menu-item"
+                                onClick={() => startRename(r)}
+                              >
                                 Rename
                               </button>
 
@@ -803,8 +879,30 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
                               >
                                 Orientation
                               </button>
+                              
+                              {r.status === "PAIRED" ? (
+                                <button
+                                  type="button"
+                                  className="ns2-menu-item"
+                                  onClick={() => inactivateScreen(r)}
+                                >
+                                  Inactivate
+                                </button>
+                              ) : r.status === "PENDING" && r.activePairingCode ? (
+                                <button
+                                  type="button"
+                                  className="ns2-menu-item"
+                                  onClick={() => activateScreen(r)}
+                                >
+                                  Activate
+                                </button>
+                              ) : null}
 
-                              <button type="button" className="ns2-menu-item ns2-menu-danger" onClick={() => requestDelete(r)}>
+                              <button
+                                type="button"
+                                className="ns2-menu-item ns2-menu-danger"
+                                onClick={() => requestDelete(r)}
+                              >
                                 Delete
                               </button>
                             </div>
@@ -829,7 +927,13 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
         </>
       )}
 
-      <PairScreenModal open={pairOpen} onClose={() => setPairOpen(false)} onSubmit={pairScreen} isSubmitting={pairSubmitting} error={pairError} />
+      <PairScreenModal
+        open={pairOpen}
+        onClose={() => setPairOpen(false)}
+        onSubmit={pairScreen}
+        isSubmitting={pairSubmitting}
+        error={pairError}
+      />
 
       <ScreenSetContentModal
         open={setContentOpen}
@@ -847,7 +951,6 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
         screenOrientation={setContentScreenOrientation}
       />
 
-      {/* Orientation Modal */}
       <Modal
         open={orientOpen}
         title="Screen orientation"
@@ -859,7 +962,9 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
         }}
       >
         <div className="ns2-del-body">
-          <div className="ns2-del-title">{orientTarget ? `Orientation for "${orientTarget.name}"` : "Orientation"}</div>
+          <div className="ns2-del-title">
+            {orientTarget ? `Orientation for "${orientTarget.name}"` : "Orientation"}
+          </div>
 
           <div style={{ marginTop: 12 }}>
             <select
@@ -873,30 +978,44 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
               <option value="PORTRAIT" disabled={disablePortrait}>Portrait</option>
               <option value="PORTRAIT_FLIPPED" disabled={disablePortrait}>Portrait (flipped)</option>
             </select>
+
             <div style={{ marginTop: 10, fontSize: 13, opacity: 0.85, lineHeight: 1.4 }}>
-  {orientInfoLoading ? (
-    <span>Checking assigned channel orientation…</span>
-  ) : restrictByChannel ? (
-    <span>
-      This screen is assigned to{" "}
-      <b>{orientChannelInfo?.name ?? "a channel"}</b>{" "}
-      (<b>{assignedChannelBase}</b>).<br />
-      To switch to <b>{assignedChannelBase === "landscape" ? "portrait" : "landscape"}</b>, first change content to a playlist/media or assign a matching channel.
-    </span>
-  ) : (
-    <span>
-      Landscape/Portrait changes the base layout. Flipped options rotate 180° without changing base orientation.
-    </span>
-  )}
-</div>
+              {orientInfoLoading ? (
+                <span>Checking assigned channel orientation…</span>
+              ) : restrictByChannel ? (
+                <span>
+                  This screen is assigned to <b>{orientChannelInfo?.name ?? "a channel"}</b> (
+                  <b>{assignedChannelBase}</b>).<br />
+                  To switch to <b>{assignedChannelBase === "landscape" ? "portrait" : "landscape"}</b>,
+                  first change content to a playlist/media or assign a matching channel.
+                </span>
+              ) : (
+                <span>
+                  Landscape/Portrait changes the base layout. Flipped options rotate 180° without changing base orientation.
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="ns2-del-actions">
-            <button type="button" className="ns2-linkbtn" disabled={orientBusy} onClick={() => { setOrientOpen(false); setOrientTarget(null); }}>
+            <button
+              type="button"
+              className="ns2-linkbtn"
+              disabled={orientBusy}
+              onClick={() => {
+                setOrientOpen(false);
+                setOrientTarget(null);
+              }}
+            >
               Cancel
             </button>
 
-            <button type="button" className="ns2-primarybtn" disabled={orientBusy || !orientTarget} onClick={saveOrientation}>
+            <button
+              type="button"
+              className="ns2-primarybtn"
+              disabled={orientBusy || !orientTarget}
+              onClick={saveOrientation}
+            >
               {orientBusy ? "Saving…" : "Save"}
             </button>
           </div>
@@ -914,8 +1033,12 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
         }}
       >
         <div className="ns2-del-body">
-          <div className="ns2-del-title">{deleteTarget ? `Delete "${deleteTarget.name}"?` : "Delete this screen?"}</div>
-          <div className="ns2-del-sub">This action cannot be undone. If a virtual screen is open, it will stop receiving updates.</div>
+          <div className="ns2-del-title">
+            {deleteTarget ? `Delete "${deleteTarget.name}"?` : "Delete this screen?"}
+          </div>
+          <div className="ns2-del-sub">
+            This action cannot be undone. If a virtual screen is open, it will stop receiving updates.
+          </div>
 
           <div className="ns2-del-actions">
             <button
@@ -930,7 +1053,12 @@ const disableLandscape = restrictByChannel && assignedChannelBase === "portrait"
               Cancel
             </button>
 
-            <button type="button" className="ns2-dangerbtn" disabled={deleteBusy} onClick={confirmDelete}>
+            <button
+              type="button"
+              className="ns2-dangerbtn"
+              disabled={deleteBusy}
+              onClick={confirmDelete}
+            >
               {deleteBusy ? "Deleting…" : "Delete"}
             </button>
           </div>

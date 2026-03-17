@@ -49,14 +49,24 @@
 }
 
 .ml-btn-yellow {
-  background: #f5c542;
-  border-color: #f5c542;
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  color: #ffffff;
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-weight: 650;
 }
 
+.ml-btn-yellow:hover:not(:disabled) {
+  background: var(--brand-primary-dark);
+  border-color: var(--brand-primary-dark);
+}
+
+.ml-btn-yellow:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .ml-btn-danger {
   background: #fef2f2;
   border-color: #fecaca;
@@ -667,7 +677,9 @@
 
 .ml-uploadfill {
   height: 100%;
-  background: #f5c542;
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  color: #ffffff;
   width: 0%;
   transition: width 120ms linear;
 }

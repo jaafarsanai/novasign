@@ -1,8 +1,8 @@
-import { IsOptional, IsString, MinLength } from "class-validator";
+import { IsOptional, IsString, Length } from "class-validator";
 
 export class PairScreenDto {
   @IsString()
-  @MinLength(3)
+  @Length(6, 6)
   code!: string;
 
   @IsOptional()

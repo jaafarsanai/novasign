@@ -1,256 +1,226 @@
-import React from "react";
-import { NavLink } from "react-router-dom";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { brand } from "../config/brand";
+import { getMe, logoutRequest, type MeResponse } from "../lib/auth";
 import "./Sidebar.css";
 
-type Item = {
+type MenuItem = {
   label: string;
-  to: string;
+  path: string;
   icon: React.ReactNode;
 };
 
-function Icon({ children }: { children: React.ReactNode }) {
-  return <span className="sb-icon">{children}</span>;
-}
-
-const items: Item[] = [
+const menuItems: MenuItem[] = [
   {
     label: "Welcome",
-    to: "/",
+    path: "/",
     icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 10.5 12 4l8 6.5V20a1 1 0 0 1-1 1h-5v-6H10v6H5a1 1 0 0 1-1-1v-9.5Z"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </Icon>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 3l9 8h-3v10h-5v-6H11v6H6V11H3l9-8z" />
+      </svg>
     ),
   },
   {
     label: "Screens",
-    to: "/screens",
+    path: "/screens",
     icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"
-            stroke="currentColor"
-            strokeWidth="2"
-          />
-          <path
-            d="M8 21h8"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </Icon>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16a2 2 0 012 2v9a2 2 0 01-2 2h-6v2h3v2H7v-2h3v-2H4a2 2 0 01-2-2V7a2 2 0 012-2zm0 2v9h16V7H4z" />
+      </svg>
     ),
   },
   {
     label: "Channels",
-    to: "/channels",
+    path: "/channels",
     icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 7h16M4 12h16M4 17h10"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </Icon>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h10v2H4v-2z" />
+      </svg>
     ),
   },
   {
     label: "Playlists",
-    to: "/playlists",
+    path: "/playlists",
     icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 6h12M4 10h12M4 14h8"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <path
-            d="M18 10v8a2 2 0 1 1-2-2h2"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </Icon>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6h12v2H4V6zm0 4h12v2H4v-2zm0 4h8v2H4v-2zm14-8v9.2a3 3 0 11-2-2.83V6h2z" />
+      </svg>
     ),
   },
   {
     label: "Media",
-    to: "/media",
+    path: "/media",
     icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6Z"
-            stroke="currentColor"
-            strokeWidth="2"
-          />
-          <path d="M9 10l6 4-6 4v-8Z" fill="currentColor" />
-        </svg>
-      </Icon>
-    ),
-  },
-  {
-    label: "Links",
-    to: "/links",
-    icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M10 13a5 5 0 0 1 0-7l1-1a5 5 0 0 1 7 7l-1 1"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <path
-            d="M14 11a5 5 0 0 1 0 7l-1 1a5 5 0 0 1-7-7l1-1"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </Icon>
-    ),
-  },
-  {
-    label: "Dashboards",
-    to: "/dashboards",
-    icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 13h7v7H4v-7Zm9-9h7v16h-7V4ZM4 4h7v7H4V4Z"
-            stroke="currentColor"
-            strokeWidth="2"
-          />
-        </svg>
-      </Icon>
-    ),
-  },
-  {
-    label: "Canvas",
-    to: "/canvas",
-    icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 7h16M7 4v16"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-          <path
-            d="M7 7h13v13H7V7Z"
-            stroke="currentColor"
-            strokeWidth="2"
-          />
-        </svg>
-      </Icon>
-    ),
-  },
-  {
-    label: "Apps",
-    to: "/apps",
-    icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M4 4h7v7H4V4Zm9 0h7v7h-7V4ZM4 13h7v7H4v-7Zm9 0h7v7h-7v-7Z"
-            stroke="currentColor"
-            strokeWidth="2"
-          />
-        </svg>
-      </Icon>
-    ),
-  },
-  {
-    label: "Quick Post",
-    to: "/quick-post",
-    icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M12 5v14M5 12h14"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </Icon>
-    ),
-  },
-  {
-    label: "Metrics",
-    to: "/metrics",
-    icon: (
-      <Icon>
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-          <path
-            d="M5 19V9m7 10V5m7 14v-7"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-          />
-        </svg>
-      </Icon>
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 5h16a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V7a2 2 0 012-2zm0 2v10h16V7H4zm3 8l3-4 2 3 3-4 4 5H7z" />
+      </svg>
     ),
   },
 ];
 
+function isActivePath(currentPath: string, itemPath: string) {
+  if (itemPath === "/") return currentPath === "/" || currentPath === "";
+  return currentPath === itemPath || currentPath.startsWith(itemPath + "/");
+}
+
+function initialsFromUser(me: MeResponse | null) {
+  const fullName = me?.user?.fullName?.trim();
+  const email = me?.user?.email;
+
+  if (fullName) {
+    const parts = fullName.split(/\s+/).slice(0, 2);
+    return parts.map((p) => p[0]?.toUpperCase() || "").join("") || brand.initials;
+  }
+
+  if (email) return email[0]?.toUpperCase() || brand.initials;
+  return brand.initials;
+}
+
+function displayName(me: MeResponse | null) {
+  return me?.user?.fullName?.trim() || me?.user?.email || brand.appName;
+}
+
+function displayEmail(me: MeResponse | null) {
+  return me?.user?.email || "";
+}
+
 export default function Sidebar() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
+  const [me, setMe] = useState<MeResponse | null>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let active = true;
+
+    getMe().then((nextMe) => {
+      if (!active) return;
+      setMe(nextMe);
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [location.pathname]);
+
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!menuRef.current) return;
+      if (menuRef.current.contains(e.target as Node)) return;
+      setMenuOpen(false);
+    }
+
+    if (menuOpen) {
+      document.addEventListener("mousedown", onDocClick);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+    };
+  }, [menuOpen]);
+
+  const workspaceLabel = useMemo(() => {
+    const activeWorkspaceId = me?.auth?.activeWorkspaceId;
+    const activeWorkspace = me?.workspaces?.find((w) => w.id === activeWorkspaceId);
+    return activeWorkspace?.name || me?.organization?.name || "Workspace";
+  }, [me]);
+
+  async function handleLogout() {
+    try {
+      await logoutRequest();
+      setMe(null);
+    } finally {
+      setMenuOpen(false);
+      navigate("/login", { replace: true });
+      window.location.href = "/login";
+    }
+  }
+
+  function handleAccountSettings() {
+    setMenuOpen(false);
+    navigate("/account-settings");
+  }
+
   return (
-    <aside className="sb">
-      <div className="sb-brand">
-        <div className="sb-brand-badge">
-          <img
-            src={brand.logoIcon}
-            alt={brand.appName}
-            style={{ width: 22, height: 22, objectFit: "contain" }}
-          />
-        </div>
-        <div className="sb-brand-text">
-          <div className="sb-brand-name">{brand.appName}</div>
-          <div className="sb-brand-space">{brand.workspaceName}</div>
+    <aside className="sb-shell">
+      <div className="sb-top">
+        <button
+          type="button"
+          className="sb-brand"
+          onClick={() => navigate("/screens")}
+          aria-label={brand.appName}
+        >
+          <img src={brand.logoFull} alt={brand.appName} className="sb-brand-logo" />
+        </button>
+
+        <div className="sb-workspace-box">
+          <div className="sb-workspace-label">Space</div>
+          <div className="sb-workspace-name">{workspaceLabel}</div>
         </div>
       </div>
 
       <nav className="sb-nav">
-        {items.map((it) => (
-          <NavLink
-            key={it.to}
-            to={it.to}
-            className={({ isActive }) => "sb-item" + (isActive ? " sb-item--active" : "")}
-          >
-            {it.icon}
-            <span className="sb-label">{it.label}</span>
-          </NavLink>
-        ))}
+        {menuItems.map((item) => {
+          const active = isActivePath(location.pathname, item.path);
+
+          return (
+            <button
+              key={item.label}
+              type="button"
+              className={`sb-nav-item${active ? " is-active" : ""}`}
+              onClick={() => navigate(item.path)}
+            >
+              <span className="sb-nav-icon">{item.icon}</span>
+              <span className="sb-nav-text">{item.label}</span>
+            </button>
+          );
+        })}
       </nav>
 
-      <div className="sb-footer">
-        <button className="sb-support">Support</button>
+      <div className="sb-bottom">
+        <button type="button" className="sb-support-btn">
+          Support
+        </button>
 
-        <div className="sb-user">
-          <div className="sb-user-avatar">{brand.initials}</div>
-          <div className="sb-user-meta">
-            <div className="sb-user-name">{brand.demoUserName.toLowerCase()}</div>
-            <div className="sb-user-email">{brand.demoUserEmail}</div>
-          </div>
+        <div className="sb-user-wrap" ref={menuRef}>
+          {menuOpen && (
+            <div className="sb-user-menu">
+              <button type="button" className="sb-user-menu-item" onClick={handleAccountSettings}>
+                <span className="sb-user-menu-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M19.14 12.94a7.43 7.43 0 000-1.88l2.03-1.58-1.92-3.32-2.39.96a7.78 7.78 0 00-1.63-.95L14.87 2h-3.74l-.36 2.17a7.78 7.78 0 00-1.63.95l-2.39-.96-1.92 3.32 2.03 1.58a7.43 7.43 0 000 1.88L2.83 14.52l1.92 3.32 2.39-.96c.5.39 1.04.71 1.63.95L11.13 22h3.74l.36-2.17c.59-.24 1.13-.56 1.63-.95l2.39.96 1.92-3.32-2.03-1.58zM13 15.5a3.5 3.5 0 110-7 3.5 3.5 0 010 7z" />
+                  </svg>
+                </span>
+                <span>Account Settings</span>
+              </button>
+
+              <button type="button" className="sb-user-menu-item is-danger" onClick={handleLogout}>
+                <span className="sb-user-menu-icon">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M10 17l1.41-1.41L8.83 13H20v-2H8.83l2.58-2.59L10 7l-5 5 5 5zm9 2h-7v-2h7V7h-7V5h7a2 2 0 012 2v10a2 2 0 01-2 2z" />
+                  </svg>
+                </span>
+                <span>Logout</span>
+              </button>
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="sb-user-button"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+          >
+            <div className="sb-user-avatar">{initialsFromUser(me)}</div>
+
+            <div className="sb-user-meta">
+              <div className="sb-user-name">{displayName(me)}</div>
+              <div className="sb-user-email">{displayEmail(me)}</div>
+            </div>
+          </button>
         </div>
       </div>
     </aside>

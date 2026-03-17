@@ -132,15 +132,21 @@
 }
 
 .pe-btn-primary {
-  background: #f5c400;
-  border-color: rgba(0,0,0,0.10);
+  background: var(--brand-primary);
+  border-color: var(--brand-primary);
+  color: #fff;
   font-weight: 700;
 }
 
-.pe-btn-primary:hover:enabled {
-  filter: brightness(0.98);
+.pe-btn-primary:hover:not(:disabled) {
+  background: var(--brand-primary-dark);
+  border-color: var(--brand-primary-dark);
 }
 
+.pe-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
 .pe-btn-danger {
   background: rgba(220, 38, 38, 0.06);
   border-color: rgba(220, 38, 38, 0.22);
@@ -442,7 +448,8 @@
   right: 12px;
   bottom: 0;
   height: 3px;
-  background: #f5c400;
+ background: var(--brand-primary-dark);
+  border-color: var(--brand-primary-dark);
   border-radius: 999px;
 }
 
