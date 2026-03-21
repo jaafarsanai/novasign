@@ -1195,9 +1195,22 @@ useEffect(() => {
     return (n / denom) * 100;
   }
 
-  const channelOrientation = String((channel as any)?.orientation ?? "landscape");
-  const layoutDesignW = channelOrientation === "portrait" ? 1080 : 1920;
-  const layoutDesignH = channelOrientation === "portrait" ? 1920 : 1080;
+ const screenOrientation = ((vsState as any)?.orientation ?? "LANDSCAPE") as ScreenOrientation4;
+const desiredBase: "landscape" | "portrait" =
+  String(screenOrientation).startsWith("PORTRAIT") ? "portrait" : "landscape";
+const isFlipped = String(screenOrientation).endsWith("_FLIPPED");
+
+// zone geometry must follow the assigned content orientation.
+// keep screen orientation for rotation/flip only.
+const contentBase: "landscape" | "portrait" =
+  playingChannel
+    ? String((channel as any)?.orientation ?? "landscape") === "portrait"
+      ? "portrait"
+      : "landscape"
+    : desiredBase;
+
+const layoutDesignW = contentBase === "portrait" ? 1080 : 1920;
+const layoutDesignH = contentBase === "portrait" ? 1920 : 1080;
 
   const zoneRects = useMemo<ZoneRect[]>(() => {
     if (!layoutDef) return [];
@@ -1617,21 +1630,17 @@ useEffect(() => {
     };
   }, [embed, scale, isPlaying, vsState?.orientation]);
 
-  const screenOrientation = ((vsState as any)?.orientation ?? "LANDSCAPE") as ScreenOrientation4;
-  const desiredBase: "landscape" | "portrait" = String(screenOrientation).startsWith("PORTRAIT") ? "portrait" : "landscape";
-  const isFlipped = String(screenOrientation).endsWith("_FLIPPED");
-
   const viewportBase: "landscape" | "portrait" = playerBox.w >= playerBox.h ? "landscape" : "portrait";
-  const baseRot = viewportBase === desiredBase ? 0 : desiredBase === "portrait" ? 90 : 270;
-  const rotDeg = (baseRot + (isFlipped ? 180 : 0)) % 360;
+const baseRot = viewportBase === desiredBase ? 0 : desiredBase === "portrait" ? 90 : 270;
+const rotDeg = (baseRot + (isFlipped ? 180 : 0)) % 360;
 
-  const contentDesignW = desiredBase === "portrait" ? 1080 : 1920;
-  const contentDesignH = desiredBase === "portrait" ? 1920 : 1080;
+const contentDesignW = contentBase === "portrait" ? 1080 : 1920;
+const contentDesignH = contentBase === "portrait" ? 1920 : 1080;
 
-  const swap = rotDeg % 180 !== 0;
-  const rotW = swap ? contentDesignH : contentDesignW;
-  const rotH = swap ? contentDesignW : contentDesignH;
-  const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) * 0.97;
+const swap = rotDeg % 180 !== 0;
+const rotW = swap ? contentDesignH : contentDesignW;
+const rotH = swap ? contentDesignW : contentDesignH;
+const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) ;
 
   const stageStyle = useMemo<React.CSSProperties>(() => {
   return {
