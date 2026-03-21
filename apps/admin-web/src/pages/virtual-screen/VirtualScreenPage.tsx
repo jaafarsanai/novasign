@@ -129,6 +129,17 @@ type MediaRow = {
   thumbnailUrl?: string;
 };
 
+type NativePlayerBridge = {
+  saveLastRuntimeUrl?: (url?: string | null) => void;
+  clearSavedRuntimeUrl?: () => void;
+};
+
+declare global {
+  interface Window {
+    NSPlayer?: NativePlayerBridge;
+  }
+}
+
 const runtimeKeyStorageKey = (key: string) => `ns2:vs-runtime:${key}`;
 const openKey = (key: string) => `ns2:vs-open:${key}`;
 
@@ -373,7 +384,16 @@ export default function VirtualScreenPage(props?: {
   pairingCode?: string;
   sessionId?: string;
 }) {
-  const embed = !!props?.embed;
+  const embedFromQuery = (() => {
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    return sp.get("embed") === "1";
+  } catch {
+    return false;
+  }
+})();
+
+const embed = !!props?.embed || embedFromQuery;
   const forcedCode = props?.pairingCode?.trim().toUpperCase() || "";
 
   const lastStateUpdatedAtRef = useRef<number>(-1);
@@ -447,6 +467,23 @@ export default function VirtualScreenPage(props?: {
   const runtimeKey = routeRuntimeKey || runtimeIdentity?.runtimeKey || "";
   const screenId = runtimeIdentity?.screenId ?? vsState?.screenId ?? null;
 
+
+useEffect(() => {
+  if (!embed) return;
+
+  try {
+    if (runtimeKey) {
+      const runtimeUrl =
+        `${window.location.origin}/virtual-screen/runtime/${encodeURIComponent(runtimeKey)}?embed=1`;
+      window.NSPlayer?.saveLastRuntimeUrl?.(runtimeUrl);
+    } else {
+      window.NSPlayer?.clearSavedRuntimeUrl?.();
+    }
+  } catch {
+    // ignore native bridge failures
+  }
+}, [embed, runtimeKey]);
+
   const sockRef = useRef<Socket | null>(null);
 
   const [idx, setIdx] = useState(0);
@@ -476,6 +513,15 @@ export default function VirtualScreenPage(props?: {
 const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
   const resolvedBlobUrlsRef = useRef<string[]>([]);
 
+
+const [isOnline, setIsOnline] = useState<boolean>(() => {
+  try {
+    return navigator.onLine;
+  } catch {
+    return true;
+  }
+});
+
     const makeAssetLookupKeys = useCallback((item?: { id?: string; url?: string } | null) => {
     const keys: string[] = [];
     const id = String(item?.id ?? "").trim();
@@ -488,19 +534,24 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
   }, []);
 
   const getPlayableUrl = useCallback(
-    (item?: { id?: string; url?: string } | null) => {
-      if (!item) return "";
-      const keys = makeAssetLookupKeys(item);
+  (item?: { id?: string; url?: string } | null) => {
+    if (!item) return "";
+    const keys = makeAssetLookupKeys(item);
 
-      for (const key of keys) {
-        const resolved = assetUrlMap[key];
-        if (resolved) return resolved;
-      }
+    for (const key of keys) {
+      const resolved = assetUrlMap[key];
+      if (resolved) return resolved;
+    }
 
-      return String(item.url ?? "");
-    },
-    [assetUrlMap, makeAssetLookupKeys],
-  );
+    if (!isOnline) {
+      return "";
+    }
+
+    return String(item.url ?? "");
+  },
+  [assetUrlMap, makeAssetLookupKeys, isOnline],
+);
+
   useEffect(() => {
     return () => {
       for (const u of resolvedBlobUrlsRef.current) {
@@ -515,6 +566,20 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
   useEffect(() => {
     zoneIdxRef.current = zoneIdx;
   }, [zoneIdx]);
+
+
+useEffect(() => {
+  const onOnline = () => setIsOnline(true);
+  const onOffline = () => setIsOnline(false);
+
+  window.addEventListener("online", onOnline);
+  window.addEventListener("offline", onOffline);
+
+  return () => {
+    window.removeEventListener("online", onOnline);
+    window.removeEventListener("offline", onOffline);
+  };
+}, []);
 
   const [zoneActiveLayer, setZoneActiveLayer] = useState<Record<string, "a" | "b">>({});
   const zoneActiveLayerRef = useRef<Record<string, "a" | "b">>({});
@@ -605,6 +670,7 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
     }
   };
 
+  
   void poll();
   const t = window.setInterval(poll, 2000);
 
@@ -614,7 +680,81 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
   };
 }, [forcedCode, runtimeIdentity?.runtimeKey]);
 
+useEffect(() => {
+  if (!runtimeKey) return;
+  if (!isOnline) return;
 
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const manifest = await getBestAvailableManifest(runtimeKey);
+      if (!manifest || cancelled) return;
+
+      if (manifest.state) {
+        setVsState((prev) => {
+          const nextTs = Number(manifest.state.updatedAt ?? 0);
+          const prevTs = Number(prev?.updatedAt ?? 0);
+          return nextTs >= prevTs ? manifest.state : prev;
+        });
+      }
+
+      if (manifest.playlist) {
+        setVsPlaylist((prev) => {
+          const nextTs = Number(manifest.playlist.updatedAt ?? 0);
+          const prevTs = Number(prev?.updatedAt ?? 0);
+          return nextTs >= prevTs ? manifest.playlist : prev;
+        });
+      }
+
+      const assets = Array.isArray(manifest.assets) ? manifest.assets : [];
+      const nextMap: Record<string, string> = {};
+      const newBlobUrls: string[] = [];
+
+      for (const asset of assets as RuntimeManifestAsset[]) {
+        try {
+          const resolvedUrl = await resolveMediaUrl(asset);
+          if (!resolvedUrl) continue;
+
+          const assetId = String(asset.id ?? "").trim();
+          const assetUrl = String(asset.url ?? "").trim();
+
+          if (assetId) nextMap[assetId] = resolvedUrl;
+          if (assetUrl) nextMap[assetUrl] = resolvedUrl;
+
+          if (resolvedUrl.startsWith("blob:")) {
+            newBlobUrls.push(resolvedUrl);
+          }
+        } catch {}
+      }
+
+      if (cancelled) {
+        for (const u of newBlobUrls) {
+          try {
+            URL.revokeObjectURL(u);
+          } catch {}
+        }
+        return;
+      }
+
+      for (const oldUrl of resolvedBlobUrlsRef.current) {
+        try {
+          URL.revokeObjectURL(oldUrl);
+        } catch {}
+      }
+
+      resolvedBlobUrlsRef.current = newBlobUrls;
+      setAssetUrlMap(nextMap);
+      setRefreshSeq(Date.now());
+    } catch {
+      // keep current playback if refresh fails
+    }
+  })();
+
+  return () => {
+    cancelled = true;
+  };
+}, [runtimeKey, isOnline]);
 
   useEffect(() => {
     let cancelled = false;
@@ -703,6 +843,7 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
     (async () => {
       try {
         const manifest = await getBestAvailableManifest(runtimeKey);
+
         if (!manifest || cancelled) return;
 
         if (manifest.state) {
@@ -874,8 +1015,11 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
       }
 
       if (!p.exists && !directRuntimeMode && identityStorageKey) {
-        setRuntimeIdentity(null);
-      }
+  setRuntimeIdentity(null);
+  try {
+    window.NSPlayer?.clearSavedRuntimeUrl?.();
+  } catch {}
+}
     };
 
     const onPlaylist = (p: VsPlaylistPayload) => {
@@ -1487,20 +1631,21 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
   const swap = rotDeg % 180 !== 0;
   const rotW = swap ? contentDesignH : contentDesignW;
   const rotH = swap ? contentDesignW : contentDesignH;
-  const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) * 1.02;
+  const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) * 0.97;
 
   const stageStyle = useMemo<React.CSSProperties>(() => {
-    return {
-      position: "absolute",
-      left: "50%",
-      top: "50%",
-      width: `${contentDesignW}px`,
-      height: `${contentDesignH}px`,
-      transformOrigin: "center center",
-      transform: `translate(-50%, -50%) rotate(${rotDeg}deg) scale(${s})`,
-      overflow: "hidden",
-    };
-  }, [contentDesignW, contentDesignH, rotDeg, s]);
+  return {
+    position: "absolute",
+    left: "50%",
+    top: "50%",
+    width: `${contentDesignW}px`,
+    height: `${contentDesignH}px`,
+    transformOrigin: "center center",
+    transform: `translate(-50%, -50%) rotate(${rotDeg}deg) scale(${s})`,
+    overflow: "hidden",
+    background: "#000",
+  };
+}, [contentDesignW, contentDesignH, rotDeg, s]);
 
   const codeForUi = pairingCode || "— — — — —";
 
@@ -1512,30 +1657,32 @@ const [assetUrlMap, setAssetUrlMap] = useState<Record<string, string>>({});
   const tvClass = `vs-tv ${(playingLegacy && currentItem) || playingChannel ? "vs-tv--media" : ""}`;
 
   const videoFillStyle = useMemo<React.CSSProperties>(
-    () => ({
-      position: "absolute",
-      inset: 0,
-      width: "100%",
-      height: "100%",
-      minWidth: "100%",
-      minHeight: "100%",
-      objectFit: "fill",
-      display: "block",
-      backgroundColor: "#000",
-    }),
-    [],
-  );
+  () => ({
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    minWidth: "100%",
+    minHeight: "100%",
+    objectFit: "fill",
+    objectPosition: "center",
+    display: "block",
+    backgroundColor: "#000",
+  }),
+  [],
+);
 
-  const bgFillBase = useMemo<React.CSSProperties>(
-    () => ({
-      position: "absolute",
-      inset: 0,
-      backgroundPosition: "center",
-      backgroundRepeat: "no-repeat",
-      backgroundSize: "100% 100%",
-    }),
-    [],
-  );
+const bgFillBase = useMemo<React.CSSProperties>(
+  () => ({
+    position: "absolute",
+    inset: 0,
+    backgroundPosition: "center",
+    backgroundRepeat: "no-repeat",
+    backgroundSize: "100% 100%",
+    backgroundColor: "#000",
+  }),
+  [],
+);
 
     const renderImageFill = (item: { id?: string; url?: string }, key: string) => {
     const base = getPlayableUrl(item);
