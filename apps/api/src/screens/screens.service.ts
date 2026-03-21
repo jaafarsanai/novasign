@@ -268,35 +268,44 @@ export class ScreensService {
     });
   }
 
-  private async assertOrganizationHasAvailableScreenSlot(organizationId: string) {
-    const now = new Date();
+private async assertOrganizationHasAvailableScreenSlot(organizationId: string) {
+  const now = new Date();
 
-    const activeLicenses = await this.prisma.license.findMany({
-      where: {
-        organizationId,
-        status: { in: ["ACTIVE", "TRIAL"] },
-        startsAt: { lte: now },
-        expiresAt: { gte: now },
-      },
-      select: { screenQuota: true },
-    });
+  const activeLicenses = await this.prisma.license.findMany({
+    where: {
+      organizationId,
+      status: { in: ["ACTIVE", "TRIAL"] },
+      startsAt: { lte: now },
+      expiresAt: { gte: now },
+    },
+    select: { screenQuota: true },
+  });
 
-    const totalQuota = activeLicenses.reduce((sum, item) => sum + (item.screenQuota ?? 0), 0);
-
-    const used = await this.prisma.screen.count({
-      where: {
-        organizationId,
-        pairedAt: { not: null },
-        isArchived: false,
-      },
-    });
-
-    if (used >= totalQuota) {
-      throw new ForbiddenException(
-        `Screen quota reached. Used ${used}/${totalQuota}. Please unpair a screen or upgrade your license.`,
-      );
-    }
+  if (!activeLicenses.length) {
+    throw new ForbiddenException(
+      "No active license. Please renew or upgrade your subscription.",
+    );
   }
+
+  const totalQuota = activeLicenses.reduce(
+    (sum, item) => sum + (item.screenQuota ?? 0),
+    0,
+  );
+
+  const used = await this.prisma.screen.count({
+    where: {
+      organizationId,
+      pairedAt: { not: null },
+      isArchived: false,
+    },
+  });
+
+  if (used >= totalQuota) {
+    throw new ForbiddenException(
+      `Screen quota reached. Used ${used}/${totalQuota}. Please unpair a screen or upgrade your license.`,
+    );
+  }
+}
 
   private async generateUniquePairingCode() {
     for (let i = 0; i < 50; i++) {

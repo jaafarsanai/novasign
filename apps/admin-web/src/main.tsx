@@ -2,11 +2,15 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { brand } from "./config/brand";
-
+import { registerSW } from "virtual:pwa-register";
 import "./index.css";
 import "./theme.css";
 import "./App.css";
 import "./mobile.css";
+
+registerSW({
+  immediate: true,
+});
 
 try {
   const k = `${brand.key}:user`;
