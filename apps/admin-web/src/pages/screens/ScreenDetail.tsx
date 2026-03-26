@@ -4,7 +4,7 @@ import StatusBadge from "../../components/StatusBadge";
 import DeleteModal from "./DeleteModal";
 
 const API_BASE =
-  import.meta.env.VITE_API_URL || "http://212.71.247.250:3000";
+  import.meta.env.VITE_API_URL || "http://178.104.95.89:3000";
 
 export default function ScreenDetail() {
   const { id } = useParams();

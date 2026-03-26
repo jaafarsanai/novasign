@@ -44,7 +44,7 @@ export class PlaylistUploadController {
   @UseInterceptors(
     FilesInterceptor("files", 50, {
       storage: diskStorage({
-        destination: "/opt/novasign/storage/media",
+        destination: "/opt/pulsepanels/storage/media",
         filename: (_req, file, cb) => {
           const safeExt = extname(file.originalname || "").toLowerCase() || "";
           cb(null, `${randomUUID()}${safeExt}`);

@@ -36,7 +36,7 @@ function contentTypeFromPath(p: string) {
 
 @Controller()
 export class MediaStreamController {
-  private readonly MEDIA_DIR = "/opt/novasign/storage/media";
+  private readonly MEDIA_DIR = "/opt/pulsepanels/storage/media";
 
   @Get("media/:key")
   async stream(@Param("key") key: string, @Req() req: Request, @Res() res: Response) {

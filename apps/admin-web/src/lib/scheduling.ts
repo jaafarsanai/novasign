@@ -1,4 +1,4 @@
-// /opt/novasign/apps/admin-web/src/lib/scheduling.ts
+// /opt/pulsepanels/apps/admin-web/src/lib/scheduling.ts
 // Shared scheduling + fullscreen override logic (used by Admin UI & Player)
 
 export type Weekday = "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";

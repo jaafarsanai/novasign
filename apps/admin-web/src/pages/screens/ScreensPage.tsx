@@ -133,6 +133,10 @@ function formatSourceLabel(r: UiRow) {
   return name;
 }
 
+function formatOrientationLabel(orientation: ScreenOrientation4) {
+  return orientation.includes("PORTRAIT") ? "Portrait" : "Landscape";
+}
+
 function statusBadge(r: UiRow, nowTick: number) {
   const online = isOnline(r.lastSeenAt, nowTick, 30_000);
 
@@ -761,7 +765,7 @@ async function activateScreen(r: UiRow) {
                   <th>Type</th>
                   <th>Status</th>
                   <th>Source</th>
-                  <th>Pairing code</th>
+                  <th>Screen Type</th>
                   <th>Last seen</th>
                   <th className="ns2-th-right">Actions</th>
                 </tr>
@@ -818,7 +822,7 @@ async function activateScreen(r: UiRow) {
                       <td>{r.type}</td>
                       <td>{statusBadge(r, nowTick)}</td>
                       <td className="ns2-muted">{sourceLabel}</td>
-                      <td className="ns2-muted ns2-mono">{r.activePairingCode ?? "—"}</td>
+                      <td className="ns2-muted">{formatOrientationLabel(r.orientation)}</td>
                       <td className="ns2-muted">{formatTime(r.lastSeenAt)}</td>
 
                       <td className="ns2-td-right">

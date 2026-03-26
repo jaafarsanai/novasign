@@ -1,4 +1,4 @@
-// /opt/novasign/apps/player-web/src/components/ChannelPlayer.tsx
+// /opt/pulsepanels/apps/player-web/src/components/ChannelPlayer.tsx
 import React, { useMemo } from "react";
 import { pickFullscreenOverride } from "../lib/scheduling";
 import FullscreenItem from "./FullscreenItem";

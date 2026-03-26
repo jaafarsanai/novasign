@@ -1,6 +1,6 @@
 import React from 'react';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://212.71.247.250:3000';
+const API_BASE = import.meta.env.VITE_API_URL || 'http://178.104.95.89:3000';
 
 type ScreenStatus = 'PENDING' | 'LIVE' | 'OFFLINE';
 

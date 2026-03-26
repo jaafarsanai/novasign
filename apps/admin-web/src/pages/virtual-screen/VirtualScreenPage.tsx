@@ -1640,7 +1640,7 @@ const contentDesignH = contentBase === "portrait" ? 1920 : 1080;
 const swap = rotDeg % 180 !== 0;
 const rotW = swap ? contentDesignH : contentDesignW;
 const rotH = swap ? contentDesignW : contentDesignH;
-const s = Math.max(playerBox.w / rotW, playerBox.h / rotH) ;
+const s = Math.min(playerBox.w / rotW, playerBox.h / rotH) ;
 
   const stageStyle = useMemo<React.CSSProperties>(() => {
   return {

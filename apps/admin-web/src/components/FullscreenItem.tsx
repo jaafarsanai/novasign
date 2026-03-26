@@ -1,4 +1,4 @@
-// /opt/novasign/apps/player-web/src/components/FullscreenItem.tsx
+// /opt/pulsepanels/apps/player-web/src/components/FullscreenItem.tsx
 import React from "react";
 
 type ZoneContentItem = {

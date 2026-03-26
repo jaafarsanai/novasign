@@ -536,8 +536,8 @@ export class MediaService {
     const ext = extname(original).slice(0, 12) || "";
     const filename = `${Date.now()}-${randomUUID()}${ext}`;
 
-    await fsp.mkdir("/opt/novasign/storage/media", { recursive: true });
-    await fsp.writeFile(`/opt/novasign/storage/media/${filename}`, buf);
+    await fsp.mkdir("/opt/pulsepanels/storage/media", { recursive: true });
+    await fsp.writeFile(`/opt/pulsepanels/storage/media/${filename}`, buf);
 
     return { filename };
   }
@@ -550,7 +550,7 @@ export class MediaService {
       const file = basename(u);
       if (!file || file.includes("..") || file.includes("/")) return;
 
-      await fsp.unlink(`/opt/novasign/storage/media/${file}`);
+      await fsp.unlink(`/opt/pulsepanels/storage/media/${file}`);
     } catch {
       // ignore
     }
